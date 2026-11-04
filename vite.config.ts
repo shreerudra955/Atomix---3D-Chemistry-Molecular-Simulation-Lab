@@ -11,6 +11,15 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        './components': path.resolve(__dirname, '.'),
+        '../components': path.resolve(__dirname, '.'),
+        './data': path.resolve(__dirname, '.'),
+        '../data': path.resolve(__dirname, '.'),
+        './utils': path.resolve(__dirname, '.'),
+        '../utils': path.resolve(__dirname, '.'),
+        './audio': path.resolve(__dirname, 'audio.ts'),
+        '../utils/audio': path.resolve(__dirname, 'audio.ts'),
+        '../utils/three-setup': path.resolve(__dirname, 'three-setup.ts'),
       },
     },
     server: {
