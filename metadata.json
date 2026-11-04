@@ -1,0 +1,6 @@
+{
+  "name": "Atomix - 3D Chemistry & Molecular Simulation Lab",
+  "description": "An interactive chemistry laboratory for simulating 3D atomic structures, quantum orbitals, molecular geometries, and chemical bonding reactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
