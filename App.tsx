@@ -4,13 +4,13 @@
  */
 
 import React, { useState } from 'react';
-import { Header, LabTab } from './components/Header';
-import { AtomSimulator3D } from './components/AtomSimulator3D';
-import { MoleculeSimulator3D } from './components/MoleculeSimulator3D';
-import { ReactionSimulator3D } from './components/ReactionSimulator3D';
-import { MoleculeBuilderSandbox } from './components/MoleculeBuilderSandbox';
-import { VirtualLabWorkbench } from './components/VirtualLabWorkbench';
-import { PeriodicTableExplorer } from './components/PeriodicTableExplorer';
+import { Header, LabTab } from './Header';
+import { AtomSimulator3D } from './AtomSimulator3D';
+import { MoleculeSimulator3D } from './MoleculeSimulator3D';
+import { ReactionSimulator3D } from './ReactionSimulator3D';
+import { MoleculeBuilderSandbox } from './MoleculeBuilderSandbox';
+import { VirtualLabWorkbench } from './VirtualLabWorkbench';
+import { PeriodicTableExplorer } from './PeriodicTableExplorer';
 import { ElementData } from './types/chemistry';
 import { ELEMENTS } from './data/elements';
 
