@@ -20,6 +20,7 @@ export default defineConfig(() => {
         './audio': path.resolve(__dirname, 'audio.ts'),
         '../utils/audio': path.resolve(__dirname, 'audio.ts'),
         '../utils/three-setup': path.resolve(__dirname, 'three-setup.ts'),
+        '../services/pubchem': path_resolve(__dirname, 'pubchem.ts'),
       },
     },
     server: {
