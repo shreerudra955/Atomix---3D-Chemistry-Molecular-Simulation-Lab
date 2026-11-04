@@ -12,7 +12,7 @@ import { MoleculeBuilderSandbox } from './MoleculeBuilderSandbox';
 import { VirtualLabWorkbench } from './VirtualLabWorkbench';
 import { PeriodicTableExplorer } from './PeriodicTableExplorer';
 import { ElementData } from './types/chemistry';
-import { ELEMENTS } from './data/elements';
+import { ELEMENTS } from './elements';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<LabTab>('atoms');
