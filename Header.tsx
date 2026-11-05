@@ -1,4 +1,34 @@
 import React, { useState } from 'react';
+export function Header() {
+  return (
+    <header className="w-full bg-slate-900 border-b border-slate-800 p-4 flex items-center justify-between shadow-lg">
+      {/* LEFT SIDE: LOGO BANNER */}
+      <div className="flex items-center gap-3">
+        {/* If you uploaded an image, uncomment the line below and add your file name: */}
+        {/* <img src="./logo.png" alt="Atomix Logo" className="h-10 w-auto object-contain" /> */}
+        
+        {/* Dynamic Stylized Text Logo */}
+        <div className="flex flex-col">
+          <h1 className="text-2xl font-black tracking-wider bg-gradient-to-r from-blue-400 via-cyan-400 to-indigo-500 bg-clip-text text-transparent uppercase flex items-center gap-2">
+            <span>banner.jpg</span> Atomix
+          </h1>
+          <span className="text-[10px] font-semibold tracking-widest text-cyan-500 uppercase">
+            3D Molecular Simulation Lab
+          </span>
+        </div>
+      </div>
+
+      {/* RIGHT SIDE: STATUS BADGE */}
+      <div className="flex items-center gap-2">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+        </span>
+        <span className="text-xs font-medium text-slate-400 tracking-wider uppercase">System Active</span>
+      </div>
+    </header>
+  );
+}
 import {
   Atom,
   Compass,
