@@ -113,6 +113,7 @@ export const ReactionSimulator3D: React.FC<ReactionSimulator3DProps> = ({
   const controlsRef = useRef<OrbitControls | null>(null);
   const reactionGroupRef = useRef<THREE.Group | null>(null);
   const energyParticlesRef = useRef<Array<{ mesh: THREE.Mesh; vel: THREE.Vector3; life: number }>>([]);
+  const floorMeshRef = useRef<THREE.Mesh | null>(null);
 
   // Filtered reactions list
   const filteredReactions = useMemo(() => {
@@ -186,6 +187,7 @@ export const ReactionSimulator3D: React.FC<ReactionSimulator3DProps> = ({
     floorMesh.rotation.x = -Math.PI / 2;
     floorMesh.position.y = -3.5;
     scene.add(floorMesh);
+    floorMeshRef.current = floorMesh;
 
     setSceneReady((prev) => prev + 1);
 
@@ -251,7 +253,20 @@ export const ReactionSimulator3D: React.FC<ReactionSimulator3DProps> = ({
       window.removeEventListener('resize', handleResize);
       disposeEnv();
       renderer.dispose();
+      floorMeshRef.current = null;
     };
+  }, []);
+
+  // Update scene background and floor color on theme switch without recreating the reaction scene
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(theme === 'dark' ? 0x050814 : 0xf8fafc);
+    }
+    if (floorMeshRef.current) {
+      const mat = floorMeshRef.current.material as THREE.MeshBasicMaterial;
+      mat.color.set(theme === 'dark' ? 0x000000 : 0x94a3b8);
+      mat.opacity = theme === 'dark' ? 0.35 : 0.12;
+    }
   }, [theme]);
 
   // Rebuild 3D Reaction Molecules depending on progress
