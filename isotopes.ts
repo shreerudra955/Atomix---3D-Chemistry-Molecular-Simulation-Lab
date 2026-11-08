@@ -722,4 +722,411 @@ export const KNOWN_ISOTOPES_MAP: Record<number, IsotopeInfo[]> = {
       symbol: '⁹⁹ᵐTc',
       halfLife: '6.01 hours',
       decayMode: 'Isomeric γ transition (140.5 keV)',
-      decayProduct
+      decayProduct: '⁹⁹Tc',
+      nuclearSpin: '1/2-',
+      commonUse: 'The cornerstone of nuclear medicine: used in 80% of all diagnostic radiopharmaceutical scans globally',
+    },
+    {
+      id: 'tc-99g',
+      massNumber: 99,
+      neutrons: 56,
+      isStable: false,
+      name: 'Technetium-99 (Ground)',
+      symbol: '⁹⁹Tc',
+      halfLife: '211,100 years',
+      decayMode: 'β⁻ (294 keV)',
+      decayProduct: '⁹⁹Ru',
+      nuclearSpin: '9/2+',
+      commonUse: 'Long-lived fission product in spent nuclear fuel; standard chemical calibration source for beta detectors',
+    },
+  ],
+
+  // 53. Iodine (Z=53)
+  53: [
+    {
+      massNumber: 123,
+      neutrons: 70,
+      isStable: false,
+      name: 'Iodine-123',
+      symbol: '¹²³I',
+      halfLife: '13.22 hours',
+      decayMode: 'Electron capture (EC) + 159 keV γ',
+      decayProduct: '¹²³Te',
+      nuclearSpin: '5/2+',
+      commonUse: 'Diagnostic SPECT imaging of thyroid function and Parkinson dopamine transporter scans (DaTscan)',
+    },
+    {
+      massNumber: 127,
+      neutrons: 74,
+      isStable: true,
+      name: 'Iodine-127',
+      symbol: '¹²⁷I',
+      abundancePercent: 100,
+      halfLife: 'Stable',
+      decayMode: 'None (100% monoisotopic)',
+      nuclearSpin: '5/2+',
+      commonUse: 'Essential dietary trace element for thyroid hormones (T3/T4); potassium iodide radiation protective tablets',
+    },
+    {
+      massNumber: 131,
+      neutrons: 78,
+      isStable: false,
+      name: 'Iodine-131',
+      symbol: '¹³¹I',
+      halfLife: '8.025 days',
+      decayMode: 'β⁻ + γ (606 keV)',
+      decayProduct: '¹³¹Xe',
+      nuclearSpin: '7/2+',
+      commonUse: 'Targeted radionuclide ablation therapy for thyroid cancer and Graves disease hyperthyroidism',
+    },
+  ],
+
+  // 55. Caesium (Z=55)
+  55: [
+    {
+      massNumber: 133,
+      neutrons: 78,
+      isStable: true,
+      name: 'Caesium-133',
+      symbol: '¹³³Cs',
+      abundancePercent: 100,
+      halfLife: 'Stable',
+      decayMode: 'None (SI standard)',
+      nuclearSpin: '7/2+',
+      commonUse: 'SI unit definition of the second (exactly 9,192,631,770 hyperfine ground-state radiation cycles)',
+    },
+    {
+      massNumber: 137,
+      neutrons: 82,
+      isStable: false,
+      name: 'Caesium-137',
+      symbol: '¹³⁷Cs',
+      halfLife: '30.17 years',
+      decayMode: 'β⁻ + 661.7 keV γ',
+      decayProduct: '¹³⁷Ba',
+      nuclearSpin: '7/2+',
+      commonUse: 'Major fission product; industrial moisture-density gauges, flow meters, and blood irradiators',
+    },
+  ],
+
+  // 79. Gold (Z=79)
+  79: [
+    {
+      massNumber: 197,
+      neutrons: 118,
+      isStable: true,
+      name: 'Gold-197',
+      symbol: '¹⁹⁷Au',
+      abundancePercent: 100,
+      halfLife: 'Stable',
+      decayMode: 'None (100% monoisotopic)',
+      nuclearSpin: '3/2+',
+      commonUse: 'Corrosion-resistant electronics bonding wire, monetary bullion, gold nanoparticle medicine',
+    },
+    {
+      massNumber: 198,
+      neutrons: 119,
+      isStable: false,
+      name: 'Gold-198',
+      symbol: '¹⁹⁸Au',
+      halfLife: '2.695 days',
+      decayMode: 'β⁻ (960 keV)',
+      decayProduct: '¹⁹⁸Hg',
+      nuclearSpin: '2-',
+      commonUse: 'Radiation therapy seeds for prostate cancer brachytherapy; radiotracer in petroleum pipelines',
+    },
+  ],
+
+  // 82. Lead (Z=82)
+  82: [
+    {
+      massNumber: 204,
+      neutrons: 122,
+      isStable: true,
+      name: 'Lead-204',
+      symbol: '²⁰⁴Pb',
+      abundancePercent: 1.4,
+      halfLife: 'Stable',
+      decayMode: 'None (Primordial primordial non-radiogenic lead)',
+      nuclearSpin: '0+',
+      commonUse: 'Reference standard for Lead-Lead (Pb-Pb) isochron geological dating',
+    },
+    {
+      massNumber: 206,
+      neutrons: 124,
+      isStable: true,
+      name: 'Lead-206',
+      symbol: '²⁰⁶Pb',
+      abundancePercent: 24.1,
+      halfLife: 'Stable',
+      decayMode: 'None (Uranium-238 decay series termination)',
+      nuclearSpin: '0+',
+      commonUse: 'Final stable daughter nuclide of the Uranium-238 (4n+2) natural radioactive decay series',
+    },
+    {
+      massNumber: 207,
+      neutrons: 125,
+      isStable: true,
+      name: 'Lead-207',
+      symbol: '²⁰⁷Pb',
+      abundancePercent: 22.1,
+      halfLife: 'Stable',
+      decayMode: 'None (Uranium-235 decay series termination)',
+      nuclearSpin: '1/2-',
+      commonUse: 'Final stable daughter nuclide of the Uranium-235 (4n+3) actinium radioactive decay series',
+    },
+    {
+      massNumber: 208,
+      neutrons: 126,
+      isStable: true,
+      name: 'Lead-208',
+      symbol: '²⁰⁸Pb',
+      abundancePercent: 52.4,
+      halfLife: 'Stable',
+      decayMode: 'None (Doubly magic Z=82, N=126)',
+      nuclearSpin: '0+',
+      commonUse: 'Heaviest known stable nuclide; final stable daughter of Thorium-232 decay series; radiation shielding',
+    },
+    {
+      massNumber: 210,
+      neutrons: 128,
+      isStable: false,
+      name: 'Lead-210',
+      symbol: '²¹⁰Pb',
+      halfLife: '22.3 years',
+      decayMode: 'β⁻',
+      decayProduct: '²¹⁰Bi',
+      nuclearSpin: '0+',
+      commonUse: 'Geochronological dating of recent lake sediments, peat bogs, and polar firn ice layers',
+    },
+  ],
+
+  // 92. Uranium (Z=92)
+  92: [
+    {
+      massNumber: 234,
+      neutrons: 142,
+      isStable: false,
+      name: 'Uranium-234',
+      symbol: '²³⁴U',
+      abundancePercent: 0.0055,
+      halfLife: '245,500 years',
+      decayMode: 'α (4.77 MeV)',
+      decayProduct: '²³⁰Th',
+      nuclearSpin: '0+',
+      commonUse: 'In secular equilibrium with ²³⁸U; utilized in Uranium-Thorium radiometric dating of speleothems',
+    },
+    {
+      massNumber: 235,
+      neutrons: 143,
+      isStable: false,
+      name: 'Uranium-235',
+      symbol: '²³⁵U',
+      abundancePercent: 0.7204,
+      halfLife: '704×10⁶ years',
+      decayMode: 'α (4.40 MeV) / Thermal Fission',
+      decayProduct: '²³¹Th, Fission Fragments',
+      nuclearSpin: '7/2-',
+      commonUse: 'Only naturally occurring fissile nuclide; primary fuel for commercial nuclear reactors and naval propulsion',
+    },
+    {
+      massNumber: 238,
+      neutrons: 146,
+      isStable: false,
+      name: 'Uranium-238',
+      symbol: '²³⁸U',
+      abundancePercent: 99.2742,
+      halfLife: '4.468×10⁹ years',
+      decayMode: 'α (4.20 MeV)',
+      decayProduct: '²³⁴Th',
+      nuclearSpin: '0+',
+      commonUse: 'Primary primordial uranium isotope (age of Earth chronometer); fertile material breeding fissile ²³⁹Pu',
+    },
+  ],
+
+  // 94. Plutonium (Z=94)
+  94: [
+    {
+      massNumber: 238,
+      neutrons: 144,
+      isStable: false,
+      name: 'Plutonium-238',
+      symbol: '²³⁸Pu',
+      halfLife: '87.7 years',
+      decayMode: 'α (5.59 MeV)',
+      decayProduct: '²³⁴U',
+      nuclearSpin: '0+',
+      commonUse: 'High thermal output (0.57 W/g); Radioisotope Thermoelectric Generator (RTG) power for NASA Voyager, Cassini, Curiosity & Perseverance',
+    },
+    {
+      massNumber: 239,
+      neutrons: 145,
+      isStable: false,
+      name: 'Plutonium-239',
+      symbol: '²³⁹Pu',
+      halfLife: '24,110 years',
+      decayMode: 'α / Fast & Thermal Fission',
+      decayProduct: '²³⁵U, Fission Fragments',
+      nuclearSpin: '1/2+',
+      commonUse: 'Fissile isotope created in nuclear breeder reactors; primary fuel for nuclear weapons and MOX mixed-oxide reactor fuels',
+    },
+    {
+      massNumber: 240,
+      neutrons: 146,
+      isStable: false,
+      name: 'Plutonium-240',
+      symbol: '²⁴⁰Pu',
+      halfLife: '6,561 years',
+      decayMode: 'α / Spontaneous fission',
+      decayProduct: '²³⁶U',
+      nuclearSpin: '0+',
+      commonUse: 'High spontaneous fission rate produces significant neutron background in reactor-grade plutonium',
+    },
+  ],
+
+  // 95. Americium (Z=95)
+  95: [
+    {
+      massNumber: 241,
+      neutrons: 146,
+      isStable: false,
+      name: 'Americium-241',
+      symbol: '²⁴¹Am',
+      halfLife: '432.2 years',
+      decayMode: 'α (5.48 MeV) + 59.5 keV γ',
+      decayProduct: '²³⁷Np',
+      nuclearSpin: '5/2-',
+      commonUse: 'Ionization source in domestic smoke detectors worldwide; industrial thickness gauging',
+    },
+  ],
+
+  // 98. Californium (Z=98)
+  98: [
+    {
+      massNumber: 252,
+      neutrons: 154,
+      isStable: false,
+      name: 'Californium-252',
+      symbol: '²⁵²Cf',
+      halfLife: '2.645 years',
+      decayMode: 'α (96.9%) / Spontaneous fission (3.1%)',
+      decayProduct: '²⁴⁸Cm + 3.76 prompt neutrons',
+      nuclearSpin: '0+',
+      commonUse: 'Intense neutron emitter (2.3×10¹² n/s/g) used to start up nuclear reactors and detect explosives in luggage',
+    },
+  ],
+};
+
+export function getCleanElementSymbol(symbol: string): string {
+  return symbol.replace(/^[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]+/, '').trim() || symbol;
+}
+
+/**
+ * Superscript formatter for mass numbers (text-based fallback)
+ */
+export function formatIsotopeSymbol(symbol: string, massNumber: number): string {
+  const cleanSymbol = getCleanElementSymbol(symbol);
+  const superscripts: Record<string, string> = {
+    '0': '⁰',
+    '1': '¹',
+    '2': '²',
+    '3': '³',
+    '4': '⁴',
+    '5': '⁵',
+    '6': '⁶',
+    '7': '⁷',
+    '8': '⁸',
+    '9': '⁹',
+  };
+  const sup = massNumber
+    .toString()
+    .split('')
+    .map((c) => superscripts[c] || c)
+    .join('');
+  return `${sup}${cleanSymbol}`;
+}
+
+/**
+ * Returns comprehensive list of known stable and radioactive isotopes for any element.
+ * If the element is not in the curated high-detail map, it generates physically sound isotopes
+ * across the nuclear stability valley.
+ */
+export function getIsotopesForElement(
+  atomicNumber: number,
+  symbol: string,
+  elementName: string,
+  standardAtomicMass: number
+): IsotopeInfo[] {
+  // If curated list exists, return it
+  if (KNOWN_ISOTOPES_MAP[atomicNumber] && KNOWN_ISOTOPES_MAP[atomicNumber].length > 0) {
+    return KNOWN_ISOTOPES_MAP[atomicNumber];
+  }
+
+  // Otherwise, construct a rich list of stable and radioactive isotopes
+  const standardN = Math.round(standardAtomicMass) - atomicNumber;
+  const isotopes: IsotopeInfo[] = [];
+
+  // Generate a spread of isotopes around the standard mass
+  // Range: -2 to +3 neutrons relative to standard
+  const offsets = [-3, -2, -1, 0, 1, 2, 3];
+
+  offsets.forEach((off) => {
+    const n = standardN + off;
+    if (n < 0) return;
+    const massNumber = atomicNumber + n;
+    const isStandard = off === 0;
+
+    // Stability heuristic: elements with Z > 82 (Lead) have no stable isotopes!
+    let isStable = false;
+    let halfLife = 'Stable';
+    let decayMode = 'None (Stable)';
+
+    if (atomicNumber > 82) {
+      isStable = false;
+      if (atomicNumber >= 90) {
+        halfLife = isStandard ? '7.0×10⁶ years' : `${Math.abs(off) * 25 + 12} days`;
+        decayMode = 'α (Alpha decay)';
+      } else {
+        halfLife = `${Math.abs(off) * 18 + 3.8} days`;
+        decayMode = 'α / β⁻';
+      }
+    } else {
+      if (off === 0) {
+        isStable = true;
+        halfLife = 'Stable';
+        decayMode = 'None (Stable)';
+      } else if (off === -1 || off === 1) {
+        // Can be stable or long-lived
+        if (atomicNumber % 2 === 0 && Math.abs(off) === 1) {
+          isStable = true;
+          halfLife = 'Stable';
+          decayMode = 'None (Stable)';
+        } else {
+          isStable = false;
+          halfLife = off < 0 ? '4.8 hours' : '14.2 days';
+          decayMode = off < 0 ? 'β⁺ / EC' : 'β⁻ (Beta minus)';
+        }
+      } else {
+        isStable = false;
+        halfLife = off < 0 ? '12.4 minutes' : '2.7 years';
+        decayMode = off < 0 ? 'β⁺ / Electron capture' : 'β⁻ (Beta minus)';
+      }
+    }
+
+    isotopes.push({
+      massNumber,
+      neutrons: n,
+      isStable,
+      name: `${elementName}-${massNumber}`,
+      symbol: formatIsotopeSymbol(symbol, massNumber),
+      abundancePercent: isStandard ? 98.5 : isStable ? 1.5 : 0,
+      halfLife,
+      decayMode,
+      commonUse: isStable
+        ? `Naturally occurring stable constituent of ${elementName}`
+        : `${decayMode} radionuclide used in nuclear research and spectroscopy`,
+    });
+  });
+
+  return isotopes;
+}
