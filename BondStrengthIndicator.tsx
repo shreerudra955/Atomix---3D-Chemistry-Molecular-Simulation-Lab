@@ -430,3 +430,4 @@ export const BondStrengthIndicator: React.FC<BondStrengthIndicatorProps> = ({
     </div>
   );
 };
+    
