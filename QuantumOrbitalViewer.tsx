@@ -139,6 +139,8 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
   const controlsRef = useRef<OrbitControls | null>(null);
   const orbitalGroupRef = useRef<THREE.Group | null>(null);
   const slicePlaneHelperRef = useRef<THREE.Mesh | null>(null);
+  const shadowMeshRef = useRef<THREE.Mesh | null>(null);
+  const [sceneReady, setSceneReady] = useState<number>(0);
 
   // Initial Three.js Scene Setup
   useEffect(() => {
@@ -197,6 +199,7 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
     shadowMesh.rotation.x = -Math.PI / 2;
     shadowMesh.position.y = -8;
     scene.add(shadowMesh);
+    shadowMeshRef.current = shadowMesh;
 
     // Animation Loop
     let animationFrameId: number;
@@ -221,6 +224,7 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
     };
 
     animate();
+    setSceneReady((prev) => prev + 1);
 
     // Resize Handler
     const handleResize = () => {
@@ -239,7 +243,20 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
       window.removeEventListener('resize', handleResize);
       disposeEnv();
       renderer.dispose();
+      shadowMeshRef.current = null;
     };
+  }, []);
+
+  // Update scene background and shadow mesh color on theme switch without destroying the 3D orbital
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(theme === 'dark' ? 0x050814 : 0xf8fafc);
+    }
+    if (shadowMeshRef.current) {
+      const mat = shadowMeshRef.current.material as THREE.MeshBasicMaterial;
+      mat.color.set(theme === 'dark' ? 0x000000 : 0x94a3b8);
+      mat.opacity = theme === 'dark' ? 0.4 : 0.15;
+    }
   }, [theme]);
 
   // Rebuild 3D Orbital Geometry (PointCloud + Isosurface Lobes + Slicing + Axes)
@@ -405,6 +422,7 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
     sliceInvert,
     showNodalPlanes,
     showAxes,
+    sceneReady,
   ]);
 
   const resetCamera = () => {
@@ -957,7 +975,7 @@ export const QuantumOrbitalViewer: React.FC<QuantumOrbitalViewerProps> = ({
                 <span className="text-cyan-300 font-bold">{currentOrbital.radialNodes} (n - ℓ - 1)</span>
               </div>
               <div className="bg-slate-900/80 p-1.5 rounded-lg border border-slate-800">
-                <span className="text-slate-400 block text-[9px]">Angular Nodes:</span>
+              <span className="text-slate-400 block text-[9px]">Angular Nodes:</span>
                 <span className="text-amber-300 font-bold">{currentOrbital.angularNodes} (ℓ)</span>
               </div>
               <div className="bg-slate-900/80 p-1.5 rounded-lg border border-slate-800">
