@@ -136,6 +136,7 @@ export const MoleculeSimulator3D: React.FC<MoleculeSimulator3DProps> = ({
   const atomMeshesRef = useRef<Map<string, { mesh: THREE.Mesh; atom: MolecularAtom; basePos: THREE.Vector3 }>>(new Map());
   const bondHitMeshesRef = useRef<THREE.Mesh[]>([]);
   const lastLiveLengthUpdateRef = useRef<number>(0);
+  const shadowMeshRef = useRef<THREE.Mesh | null>(null);
 
   // Real-time Bond selection & strength indicator state
   const [selectedBondIndex, setSelectedBondIndex] = useState<number | null>(() => {
@@ -236,6 +237,7 @@ export const MoleculeSimulator3D: React.FC<MoleculeSimulator3DProps> = ({
     shadowMesh.rotation.x = -Math.PI / 2;
     shadowMesh.position.y = -3.5;
     scene.add(shadowMesh);
+    shadowMeshRef.current = shadowMesh;
 
     // Signal that scene is ready to populate molecules
     setSceneReady((prev) => prev + 1);
@@ -381,7 +383,20 @@ export const MoleculeSimulator3D: React.FC<MoleculeSimulator3DProps> = ({
       canvas.removeEventListener('mousemove', handlePointerMove);
       disposeEnv();
       renderer.dispose();
+      shadowMeshRef.current = null;
     };
+  }, []);
+
+  // Update scene background and shadow disc color on theme switch without recreating the scene
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(theme === 'dark' ? 0x050814 : 0xf8fafc);
+    }
+    if (shadowMeshRef.current) {
+      const mat = shadowMeshRef.current.material as THREE.MeshBasicMaterial;
+      mat.color.set(theme === 'dark' ? 0x000000 : 0x94a3b8);
+      mat.opacity = theme === 'dark' ? 0.35 : 0.12;
+    }
   }, [theme]);
 
   // Atom selection and angle/distance measurement handler
