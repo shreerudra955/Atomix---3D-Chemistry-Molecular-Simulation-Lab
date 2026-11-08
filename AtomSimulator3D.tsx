@@ -27,7 +27,17 @@ import {
   Sun,
   BookOpen,
   Hash,
+  Radiation,
+  Radio,
+  CheckCircle2,
+  AlertTriangle,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import { IsotopeInfo, getIsotopesForElement, formatIsotopeSymbol } from '../data/isotopes';
+import { IsotopeNuclide, FormattedNuclideString } from './IsotopeNuclide';
+
 
 // Pre-allocated vector for animation loop (Three.js zero-GC discipline)
 const _tempVec = new THREE.Vector3();
@@ -684,7 +694,7 @@ const RadialProbabilityChart: React.FC<{
     const toX = (r: number) => padding + (r / maxR) * (width - 2 * padding);
     const toY = (p: number) => height - padding - (p / pMax) * (height - 2 * padding);
 
-    let d = `M ${toX(pts[0].r)} ${toY(pts[0].p)}`;
+    let d = `M ${toX(pts[0].r)} ${toY(pts[0].p)}`
     for (let i = 1; i < pts.length; i++) {
       d += ` L ${toX(pts[i].r)} ${toY(pts[i].p)}`;
     }
@@ -779,6 +789,8 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     () => typeof window !== 'undefined' && window.innerWidth < 640
   );
   const [activeTab, setActiveTab] = useState<'builder' | 'quantum' | 'properties' | 'isotopes'>('builder');
+  const [isotopeFilter, setIsotopeFilter] = useState<'all' | 'stable' | 'radioactive'>('all');
+  const [showIsotopeDrawer, setShowIsotopeDrawer] = useState<boolean>(false);
 
   // Mutable refs to solve React closure stale state in Three.js animate() loop
   const isPlayingRef = useRef<boolean>(isPlaying);
@@ -809,6 +821,48 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
   const netCharge = protons - electrons;
   const massNumber = protons + neutrons;
   const matchedElement = useMemo(() => getElement(protons) || selectedElement, [protons, selectedElement]);
+
+  // Core element isotopes & active isotope
+  const elementIsotopes = useMemo(() => {
+    return getIsotopesForElement(
+      protons,
+      matchedElement.symbol,
+      matchedElement.name,
+      matchedElement.atomicMass
+    );
+  }, [protons, matchedElement.symbol, matchedElement.name, matchedElement.atomicMass]);
+
+  const currentIsotope = useMemo<IsotopeInfo>(() => {
+    const currentMass = protons + neutrons;
+    const match = elementIsotopes.find((iso) => iso.massNumber === currentMass);
+    if (match) return match;
+    const isHeavy = protons > 82;
+    const stdN = Math.round(matchedElement.atomicMass) - protons;
+    const isStableApprox = !isHeavy && Math.abs(neutrons - stdN) <= (protons % 2 === 0 ? 1 : 0);
+    return {
+      massNumber: currentMass,
+      neutrons,
+      isStable: isStableApprox,
+      name: `${matchedElement.name}-${currentMass}`,
+      symbol: formatIsotopeSymbol(matchedElement.symbol, currentMass),
+      halfLife: isStableApprox ? 'Stable' : 'Synthetic radionuclide',
+      decayMode: isStableApprox ? 'None (Stable)' : neutrons > stdN ? 'β⁻ (Beta minus)' : 'β⁺ / EC',
+      commonUse: isStableApprox
+        ? `Naturally occurring nuclide of ${matchedElement.name}`
+        : 'Artificially synthesized radioisotope',
+    };
+  }, [elementIsotopes, protons, neutrons, matchedElement]);
+
+  const filteredIsotopes = useMemo(() => {
+    if (isotopeFilter === 'stable') return elementIsotopes.filter((iso) => iso.isStable);
+    if (isotopeFilter === 'radioactive') return elementIsotopes.filter((iso) => !iso.isStable);
+    return elementIsotopes;
+  }, [elementIsotopes, isotopeFilter]);
+
+  const handleSelectIsotope = (iso: IsotopeInfo) => {
+    setNeutrons(iso.neutrons);
+    soundFx.playReactionStep();
+  };
 
   // Calculate electron shells distribution
   const currentShells = useMemo(() => {
@@ -1110,13 +1164,30 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
   // Nuclear stability check
   const nuclearStability = useMemo(() => {
     if (protons === 0) return { stable: false, status: 'No Protons', color: 'text-amber-400' };
+
+    if (currentIsotope) {
+      if (currentIsotope.isStable) {
+        return {
+          stable: true,
+          status: `Stable (${currentIsotope.name || currentIsotope.symbol})`,
+          color: 'text-emerald-400',
+        };
+      } else {
+        return {
+          stable: false,
+          status: `Radioactive (${currentIsotope.decayMode || 'Unstable'} • t½ ${currentIsotope.halfLife || 'Short-lived'})`,
+          color: protons > 82 ? 'text-red-400' : 'text-amber-400',
+        };
+      }
+    }
+
     if (protons === 1 && neutrons === 0) return { stable: true, status: 'Stable (Protium)', color: 'text-emerald-400' };
     if (protons === 1 && neutrons === 1) return { stable: true, status: 'Stable (Deuterium)', color: 'text-emerald-400' };
     if (protons === 1 && neutrons === 2) return { stable: false, status: 'Beta- emitter (Tritium)', color: 'text-rose-400' };
 
     const ratio = neutrons / protons;
     if (protons <= 20) {
-      if (ratio >= 0.95 && ratio <= 1.25) return { stable: true, status: 'Stable Nucleus', color: 'text-emerald-400' };
+     if (ratio >= 0.95 && ratio <= 1.25) return { stable: true, status: 'Stable Nucleus', color: 'text-emerald-400' };
       if (ratio < 0.95) return { stable: false, status: 'Unstable (Proton excess / Positron emission)', color: 'text-rose-400' };
       return { stable: false, status: 'Unstable (Neutron excess / Beta- decay)', color: 'text-amber-400' };
     } else if (protons <= 82) {
@@ -1125,7 +1196,8 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     } else {
       return { stable: false, status: 'Radioactive (Alpha decay / Spontaneous fission)', color: 'text-red-500' };
     }
-  }, [protons, neutrons]);
+  }, [protons, neutrons, currentIsotope]);
+
 
   // Three.js refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -1136,8 +1208,10 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
   const shellsGroupRef = useRef<THREE.Group | null>(null);
   const orbitalsGroupRef = useRef<THREE.Group | null>(null);
   const photonsGroupRef = useRef<THREE.Group | null>(null);
+  const shadowMeshRef = useRef<THREE.Mesh | null>(null);
   const electronMeshesRef = useRef<Array<{ mesh: THREE.Mesh; shellIndex: number; angle: number; speed: number; radius: number; tiltMatrix: THREE.Matrix4 }>>([]);
   const activePhotonsRef = useRef<Array<{ mesh: THREE.Group; life: number; velocity: THREE.Vector3 }>>([]);
+  const [sceneReady, setSceneReady] = useState<number>(0);
 
   // Setup Three.js scene
   useEffect(() => {
@@ -1208,6 +1282,7 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     shadowMesh.rotation.x = -Math.PI / 2;
     shadowMesh.position.y = -8;
     scene.add(shadowMesh);
+    shadowMeshRef.current = shadowMesh;
 
     // Animation loop
     let animationFrameId: number;
@@ -1270,6 +1345,7 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     };
 
     animate();
+    setSceneReady((prev) => prev + 1);
 
     // Resize observer
     const handleResize = () => {
@@ -1288,7 +1364,20 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
       window.removeEventListener('resize', handleResize);
       disposeEnv();
       renderer.dispose();
+      shadowMeshRef.current = null;
     };
+  }, []);
+
+  // Update scene background and shadow mesh color when day/night mode switches without destroying the atom
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(theme === 'dark' ? 0x050814 : 0xf8fafc);
+    }
+    if (shadowMeshRef.current) {
+      const mat = shadowMeshRef.current.material as THREE.MeshBasicMaterial;
+      mat.color.set(theme === 'dark' ? 0x000000 : 0x94a3b8);
+      mat.opacity = theme === 'dark' ? 0.35 : 0.15;
+    }
   }, [theme]);
 
   // Rebuild Nucleus (Optimized with THREE.InstancedMesh: collapses 200+ draw calls to 2)
@@ -1309,10 +1398,10 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     if (totalNucleons <= 0) return;
 
     const nucleonRadius = 0.28;
-    const geo = new THREE.SphereGeometry(nucleonRadius, 12, 12);
+    const geo = new THREE.SphereGeometry(nucleonRadius, 14, 14);
 
     const protonMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444, // Red
+      color: 0xef4444, // Red (protons)
       emissive: 0x991b1b,
       emissiveIntensity: 0.25,
       roughness: 0.3,
@@ -1320,57 +1409,127 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     });
 
     const neutronMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8, // Sky cyan
+      color: 0x38bdf8, // Sky cyan (blue ball neutrons)
       emissive: 0x0369a1,
-      emissiveIntensity: 0.15,
+      emissiveIntensity: 0.2,
       roughness: 0.35,
       metalness: 0.1,
     });
 
-    // Golden spiral sphere packing algorithm for realistic tight nuclear cluster
-    const phi = (1 + Math.sqrt(5)) / 2;
-    const clusterScale = Math.pow(Math.max(totalNucleons, 1), 0.34) * 0.42;
+    // Hard-sphere FCC (face-centered cubic) close-packing bounded by a perfect sphere
+    // Guarantees:
+    // 1. Nucleons fill the full 3D interior volume uniformly (not just a hollow surface shell)
+    // 2. Minimum distance between any two spheres is >= 2.06 * nucleonRadius, so NO spheres ever merge or clip
+    // 3. Overall nucleus envelope is an isotropic, symmetric, perfect sphere
+    const d = nucleonRadius * 2.06; // Spacing ensures distinct spheres with no merging
+    const a = d * Math.SQRT2;
+    const halfA = a / 2;
 
     const dummy = new THREE.Object3D();
-    const pTotal = Math.max(1, protons);
-    const nTotal = Math.max(1, neutrons);
-    const protonMesh = new THREE.InstancedMesh(geo, protonMat, pTotal);
-    const neutronMesh = new THREE.InstancedMesh(geo, neutronMat, nTotal);
 
+    // Only instantiate meshes for non-zero counts (prevents phantom instances at origin!)
+    let protonMesh: THREE.InstancedMesh | null = null;
+    let neutronMesh: THREE.InstancedMesh | null = null;
+
+    if (protons > 0) {
+      protonMesh = new THREE.InstancedMesh(geo, protonMat, protons);
+      protonMesh.count = protons;
+    }
+
+    if (neutrons > 0) {
+      neutronMesh = new THREE.InstancedMesh(geo, neutronMat, neutrons);
+      neutronMesh.count = neutrons;
+    }
+
+    // Generate volume packing coordinates
+    let positions: Array<{ x: number; y: number; z: number; distSq: number }> = [];
+
+    if (totalNucleons === 1) {
+      positions = [{ x: 0, y: 0, z: 0, distSq: 0 }];
+    } else {
+      // Find candidate FCC lattice points within bounding radius
+      const estRadius = d * Math.pow(totalNucleons, 1 / 3) * 1.5;
+      const gridLimit = Math.ceil(estRadius / halfA) + 2;
+      const candidates: Array<{ x: number; y: number; z: number; distSq: number }> = [];
+
+      for (let i = -gridLimit; i <= gridLimit; i++) {
+        for (let j = -gridLimit; j <= gridLimit; j++) {
+          for (let k = -gridLimit; k <= gridLimit; k++) {
+            if ((i + j + k) % 2 === 0) {
+              const x = i * halfA;
+              const y = j * halfA;
+              const z = k * halfA;
+              candidates.push({ x, y, z, distSq: x * x + y * y + z * z });
+            }
+          }
+        }
+      }
+
+      // Sort candidate points from center outward to form a perfect sphere
+      candidates.sort((p1, p2) => p1.distSq - p2.distSq);
+      positions = candidates.slice(0, totalNucleons);
+
+      // Center of mass alignment so cluster is perfectly centered at (0, 0, 0)
+      let cx = 0, cy = 0, cz = 0;
+      for (let i = 0; i < totalNucleons; i++) {
+        cx += positions[i].x;
+        cy += positions[i].y;
+        cz += positions[i].z;
+      }
+      cx /= totalNucleons;
+      cy /= totalNucleons;
+      cz /= totalNucleons;
+
+      for (let i = 0; i < totalNucleons; i++) {
+        positions[i].x -= cx;
+        positions[i].y -= cy;
+        positions[i].z -= cz;
+        positions[i].distSq = positions[i].x * positions[i].x + positions[i].y * positions[i].y + positions[i].z * positions[i].z;
+      }
+
+      // Re-sort from origin after centering
+      positions.sort((p1, p2) => p1.distSq - p2.distSq);
+    }
+
+    // Interleave protons and neutrons evenly throughout the 3D spherical volume
     let pIdx = 0;
     let nIdx = 0;
     let pCount = 0;
     let nCount = 0;
 
     for (let i = 0; i < totalNucleons; i++) {
-      const y = totalNucleons === 1 ? 0 : 1 - (i / (totalNucleons - 1)) * 2;
-      const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = 2 * Math.PI * i * (1 - 1 / phi);
-
-      const x = Math.cos(theta) * radiusAtY * clusterScale + (Math.random() - 0.5) * 0.05;
-      const yPos = y * clusterScale + (Math.random() - 0.5) * 0.05;
-      const z = Math.sin(theta) * radiusAtY * clusterScale + (Math.random() - 0.5) * 0.05;
-
-      dummy.position.set(x, yPos, z);
+      const pos = positions[i];
+      dummy.position.set(pos.x, pos.y, pos.z);
       dummy.updateMatrix();
 
-      const isProton = (pCount / pTotal < nCount / nTotal || nCount >= neutrons) && pCount < protons;
-      if (isProton && pIdx < pTotal) {
+      const isProton =
+        ((pCount + 0.5) / Math.max(1, protons) < (nCount + 0.5) / Math.max(1, neutrons) || nCount >= neutrons) &&
+        pCount < protons;
+
+      if (isProton && protonMesh && pIdx < protons) {
         protonMesh.setMatrixAt(pIdx++, dummy.matrix);
         pCount++;
-      } else if (nIdx < nTotal) {
+      } else if (neutronMesh && nIdx < neutrons) {
         neutronMesh.setMatrixAt(nIdx++, dummy.matrix);
         nCount++;
       }
     }
 
-    protonMesh.instanceMatrix.needsUpdate = true;
-    neutronMesh.instanceMatrix.needsUpdate = true;
-    group.add(protonMesh);
-    group.add(neutronMesh);
+    if (protonMesh) {
+      protonMesh.instanceMatrix.needsUpdate = true;
+      group.add(protonMesh);
+    }
+    if (neutronMesh) {
+      neutronMesh.instanceMatrix.needsUpdate = true;
+      group.add(neutronMesh);
+    }
 
-    // Add glowing nuclear halo
-    const glowGeo = new THREE.SphereGeometry(clusterScale * 1.4 + 0.3, 14, 14);
+    // Calculate exact outer radius of the spherical nucleus
+    const maxDist = positions.length > 0 ? Math.sqrt(positions[positions.length - 1].distSq) : 0;
+    const nuclearOuterRadius = maxDist + nucleonRadius;
+
+    // Add glowing nuclear halo scaled to the perfect sphere cluster size
+    const glowGeo = new THREE.SphereGeometry(Math.max(0.65, nuclearOuterRadius + 0.25), 18, 18);
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0xf43f5e,
       transparent: true,
@@ -1378,7 +1537,7 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
       wireframe: true,
     });
     group.add(new THREE.Mesh(glowGeo, glowMat));
-  }, [protons, neutrons]);
+  }, [protons, neutrons, sceneReady]);
 
   // Rebuild Bohr Shells & Orbiting Electrons
   useEffect(() => {
@@ -1398,7 +1557,9 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     }
     group.visible = true;
 
-    const baseRadius = 2.4;
+    const totalA = protons + neutrons;
+    const estNuclearR = totalA > 1 ? Math.pow(totalA, 1 / 3) * 0.35 + 0.35 : 0.35;
+    const baseRadius = Math.max(2.4, estNuclearR + 0.85);
     const radiusStep = 1.35;
     const electronGeo = new THREE.SphereGeometry(0.18, 16, 16);
     const electronMat = new THREE.MeshPhysicalMaterial({
@@ -1463,7 +1624,7 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
         });
       }
     });
-  }, [currentShells, modelMode, showRings]);
+  }, [currentShells, modelMode, showRings, sceneReady, protons, neutrons]);
 
   // Rebuild Quantum Orbitals & Electron Cloud Probability Densities (|Ψ|²)
   // Optimized for 60 FPS across all 118 elements and s, p, d, f quantum states
@@ -2019,6 +2180,7 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
     electrons,
     aufbauConfig,
     activeOrbitalSpec,
+    sceneReady,
   ]);
 
   // Photon emission trigger
@@ -2128,14 +2290,26 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
         <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 max-w-sm pointer-events-auto">
           <div className="backdrop-blur-md bg-slate-900/85 border border-slate-800 rounded-xl p-3 shadow-xl flex items-center gap-3.5">
             <div
-              className="w-12 h-12 rounded-lg flex flex-col items-center justify-center font-bold text-white shadow-md border"
+              className="min-w-[3.5rem] h-12 px-2.5 rounded-xl flex items-center justify-center font-bold text-white shadow-md border shrink-0 transition-all select-none"
               style={{
-                backgroundColor: matchedElement.cpkColor === '#FFFFFF' ? '#475569' : matchedElement.cpkColor,
-                borderColor: 'rgba(255,255,255,0.2)',
+                backgroundColor: matchedElement.cpkColor === '#FFFFFF' ? '#334155' : matchedElement.cpkColor,
+                borderColor: 'rgba(255,255,255,0.25)',
               }}
+              title={`${matchedElement.name} isotope: mass number A=${massNumber}, atomic number Z=${matchedElement.atomicNumber}`}
             >
-              <span className="text-[10px] leading-none opacity-80">{matchedElement.atomicNumber}</span>
-              <span className="text-xl leading-none font-black">{matchedElement.symbol}</span>
+              <div className="flex items-center gap-1.5">
+                <div className="flex flex-col items-end justify-center leading-none">
+                  <span className="text-[11px] font-black leading-none text-sky-200 tabular-nums tracking-tight">
+                    {massNumber}
+                  </span>
+                  <span className="text-[9.5px] font-bold leading-none text-white/70 tabular-nums tracking-tight mt-[1px]">
+                    {matchedElement.atomicNumber}
+                  </span>
+                </div>
+                <span className="text-xl leading-none font-black tracking-tight">
+                  {matchedElement.symbol}
+                </span>
+              </div>
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -2152,9 +2326,15 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                   {netCharge === 0 ? 'Neutral Atom' : `${Math.abs(netCharge)}${netCharge > 0 ? '+' : '−'} Ion`}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">
-                Mass: {massNumber} u • {matchedElement.electronConfiguration}
-              </p>
+              <div className="flex items-center gap-1.5 text-xs font-mono mt-0.5 flex-wrap">
+                <span className="text-rose-400 font-semibold">{protons} p⁺</span>
+                <span className="text-slate-600">•</span>
+                <span className="text-sky-400 font-semibold">{neutrons} n⁰</span>
+                <span className="text-slate-600">•</span>
+                <span className="text-emerald-400 font-semibold">{electrons} e⁻</span>
+                <span className="text-slate-600">•</span>
+                <span className="text-slate-400">Mass: {massNumber} u</span>
+              </div>
             </div>
           </div>
 
@@ -2195,7 +2375,208 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
               ))}
             </select>
           </div>
+
+          {/* Isotope Quick Selector Bar */}
+          <div className="backdrop-blur-md bg-slate-900/85 border border-slate-800 rounded-xl p-2 shadow-xl flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 shrink-0">
+                  <Atom className="w-3 h-3 text-sky-400" />
+                  Isotope:
+                </span>
+                <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700/80 shrink-0">
+                  <IsotopeNuclide massNumber={massNumber} symbol={matchedElement.symbol} className="text-sky-300 font-bold" />
+                  <span className="text-slate-300 font-sans font-medium text-[11px]">
+                    ({currentIsotope.name || `${matchedElement.symbol}-${massNumber}`})
+                  </span>
+                </span>
+                {currentIsotope.isStable ? (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold shrink-0"
+                    title="Stable isotope: non-radioactive"
+                  >
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    Stable
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold shrink-0"
+                    title={`Radioactive radionuclide: ${currentIsotope.decayMode || 'Decays'} with half-life ${currentIsotope.halfLife || 'finite'}`}
+                  >
+                    <Radiation className="w-3 h-3 text-amber-400 animate-pulse" />
+                    Radioactive
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={() => setShowIsotopeDrawer(!showIsotopeDrawer)}
+                className={`p-1 rounded-lg text-xs transition-colors flex items-center gap-0.5 font-mono shrink-0 ${
+                  showIsotopeDrawer
+                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+                title="Toggle detailed isotope inspector"
+              >
+                <span className="text-[10px] hidden sm:inline">{showIsotopeDrawer ? 'Close' : 'Details'}</span>
+                {showIsotopeDrawer ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            </div>
+
+            {/* Filter pills & Quick-switch isotope chips */}
+            <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
+              {/* Filter Tabs */}
+              <div className="flex items-center bg-slate-950/80 p-0.5 rounded-lg border border-slate-800 text-[10px] font-mono">
+                {(['all', 'stable', 'radioactive'] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setIsotopeFilter(f)}
+                    className={`px-1.5 py-0.5 rounded capitalize transition-all ${
+                      isotopeFilter === f
+                        ? f === 'radioactive'
+                          ? 'bg-amber-500/30 text-amber-200 font-bold'
+                          : f === 'stable'
+                          ? 'bg-emerald-500/30 text-emerald-200 font-bold'
+                          : 'bg-sky-500/30 text-sky-200 font-bold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+
+              {/* Isotope Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto max-w-[260px] sm:max-w-[340px] py-1 no-scrollbar">
+                {filteredIsotopes.map((iso, idx) => {
+                  const isSelected = iso.massNumber === massNumber;
+                  return (
+                    <button
+                      key={iso.id || `${iso.symbol}-${iso.massNumber}-${iso.name || ''}-${idx}`}
+                      onClick={() => handleSelectIsotope(iso)}
+                      className={`px-2 py-0.5 rounded-md text-xs font-mono font-medium transition-all shrink-0 flex items-center gap-1.5 border select-none ${
+                        isSelected
+                          ? 'bg-sky-500 text-white font-bold border-sky-400 shadow-sm scale-105'
+                          : iso.isStable
+                          ? 'bg-slate-800/90 hover:bg-slate-700/90 text-emerald-300 border-emerald-500/20 hover:border-emerald-500/40'
+                          : 'bg-slate-800/90 hover:bg-slate-700/90 text-amber-300 border-amber-500/20 hover:border-amber-500/40'
+                      }`}
+                      title={`${iso.name || `${matchedElement.symbol}-${iso.massNumber}`} • ${
+                        iso.isStable ? 'Stable' : `Radioactive (${iso.decayMode || 'Decays'}, t½ ${iso.halfLife})`
+                      }`}
+                    >
+                      <IsotopeNuclide
+                        massNumber={iso.massNumber}
+                        symbol={matchedElement.symbol}
+                        className={isSelected ? 'text-white' : iso.isStable ? 'text-emerald-300' : 'text-amber-300'}
+                      />
+                      {iso.isStable ? (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      ) : (
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Collapsible Isotope Inspector Drawer */}
+            {showIsotopeDrawer && (
+              <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
+                <div className="bg-slate-950/80 border border-slate-800/90 rounded-lg p-2 text-xs">
+                  <div className="flex items-center justify-between text-slate-200 font-medium">
+                    <div className="flex items-center gap-2">
+                      <IsotopeNuclide massNumber={massNumber} symbol={matchedElement.symbol} size="lg" className="text-sky-300 font-bold" />
+                      <span className="text-slate-200 font-semibold text-xs font-sans">
+                        • {currentIsotope.name || `${matchedElement.symbol}-${massNumber}`}
+                      </span>
+                    </div>
+                    <span className="font-mono text-[11px] text-slate-400">
+                      N = {neutrons} n⁰ | A = {massNumber} u
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 mt-1.5 text-[11px]">
+                    <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                      <span className="text-slate-500 block text-[10px]">Stability & Half-Life</span>
+                      <span className={currentIsotope.isStable ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold'}>
+                        {currentIsotope.halfLife || (currentIsotope.isStable ? 'Stable' : 'Unknown')}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                      <span className="text-slate-500 block text-[10px]">Decay Mode</span>
+                      <span className="text-slate-200 font-medium">{currentIsotope.decayMode || 'None (Stable)'}</span>
+                    </div>
+                    {currentIsotope.abundancePercent !== undefined && currentIsotope.abundancePercent > 0 && (
+                      <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                        <span className="text-slate-500 block text-[10px]">Natural Abundance</span>
+                        <span className="text-sky-300 font-mono font-medium">{currentIsotope.abundancePercent}%</span>
+                      </div>
+                    )}
+                    {currentIsotope.decayProduct && (
+                      <div className="bg-slate-900/90 p-1.5 rounded border border-slate-800">
+                        <span className="text-slate-500 block text-[10px]">Decay Product</span>
+                        <span className="text-purple-300 font-mono font-medium">
+                          <FormattedNuclideString text={currentIsotope.decayProduct} />
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {currentIsotope.commonUse && (
+                    <div className="mt-1.5 text-[11px] text-slate-300 bg-slate-900/70 p-1.5 rounded border border-slate-800/60 leading-tight">
+                      <span className="text-slate-500 font-medium block text-[10px]">Application:</span>
+                      {currentIsotope.commonUse}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    All Known Isotopes of {matchedElement.name} ({elementIsotopes.length}):
+                  </span>
+                  <div className="grid grid-cols-1 gap-1">
+                    {elementIsotopes.map((iso, idx) => (
+                      <button
+                        key={iso.id || `${iso.symbol}-${iso.massNumber}-${iso.name || ''}-${idx}`}
+                        onClick={() => handleSelectIsotope(iso)}
+                        className={`p-1.5 rounded-lg border text-left transition-all flex items-center justify-between text-xs font-mono ${
+                          iso.massNumber === massNumber
+                            ? 'bg-sky-500/20 border-sky-500/60 text-white font-bold'
+                            : 'bg-slate-950/60 border-slate-800 hover:bg-slate-800/80 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-[3.5rem] shrink-0">
+                            <IsotopeNuclide
+                              massNumber={iso.massNumber}
+                              symbol={matchedElement.symbol}
+                              size="sm"
+                              className="font-bold text-sky-300"
+                            />
+                          </div>
+                          <span className="text-slate-300 text-[11px] font-sans truncate max-w-[140px]">
+                            {iso.name || `${matchedElement.symbol}-${iso.massNumber}`}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          {iso.isStable ? (
+                            <span className="text-emerald-400 font-semibold">Stable</span>
+                          ) : (
+                            <span className="text-amber-400 font-semibold truncate max-w-[90px]">
+                              {iso.halfLife || 'Radioactive'}
+                            </span>
+                          )}
+                          <span className="text-slate-500 text-[9px] font-mono">({iso.neutrons}n)</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+
 
         {/* Floating Top-Center Quantum State HUD Pill */}
         {modelMode === 'orbitals' && (
@@ -3095,13 +3476,17 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                 </button>
                 <button
                   onClick={() => setActiveTab('isotopes')}
-                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
                     activeTab === 'isotopes'
                       ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                   }`}
                 >
-                  Nuclear Isotopes & Stability
+                  <Atom className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Isotopes & Stability</span>
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-sky-300 font-bold inline-flex items-center">
+                    <IsotopeNuclide massNumber={massNumber} symbol={matchedElement.symbol} size="xs" />
+                  </span>
                 </button>
                 <button
                   onClick={() => setActiveTab('properties')}
@@ -3173,27 +3558,50 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                       onClick={() => {
                         const newP = Math.max(1, protons - 1);
                         setProtons(newP);
+                        const el = getElement(newP);
+                        if (el) {
+                          setSelectedElement(el);
+                          setNeutrons(Math.round(el.atomicMass) - el.atomicNumber);
+                          setElectrons(el.atomicNumber);
+                        }
                         soundFx.playReactionStep();
                       }}
                       className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
+                      title="Previous Element (p⁺ - 1)"
                     >
                       <Minus className="w-3.5 h-3.5" />
                     </button>
                     <input
                       type="range"
                       min={1}
-                      max={92}
+                      max={118}
                       value={protons}
-                      onChange={(e) => setProtons(Number(e.target.value))}
+                      onChange={(e) => {
+                        const newP = Number(e.target.value);
+                        setProtons(newP);
+                        const el = getElement(newP);
+                        if (el) {
+                          setSelectedElement(el);
+                          setNeutrons(Math.round(el.atomicMass) - el.atomicNumber);
+                          setElectrons(el.atomicNumber);
+                        }
+                      }}
                       className="flex-1 accent-rose-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
                     />
                     <button
                       onClick={() => {
-                        const newP = Math.min(92, protons + 1);
+                        const newP = Math.min(118, protons + 1);
                         setProtons(newP);
+                        const el = getElement(newP);
+                        if (el) {
+                          setSelectedElement(el);
+                          setNeutrons(Math.round(el.atomicMass) - el.atomicNumber);
+                          setElectrons(el.atomicNumber);
+                        }
                         soundFx.playReactionStep();
                       }}
                       className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
+                      title="Next Element (p⁺ + 1)"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -3207,7 +3615,21 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                       <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block shadow-sm" />
                       Neutrons (n⁰)
                     </span>
-                    <span className="text-xs font-mono font-bold text-slate-200">{neutrons}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono font-bold text-slate-200">{neutrons}</span>
+                      {matchedElement && neutrons !== Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber && (
+                        <button
+                          onClick={() => {
+                            setNeutrons(Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber);
+                            soundFx.playReactionStep();
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/40 text-[10px] font-mono transition-all"
+                          title="Reset to natural standard isotope neutron count"
+                        >
+                          Reset Std ({Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber} n⁰)
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-[11px] text-slate-400 mb-2">Determines Isotope Mass Number (A = Z + N)</p>
                   <div className="flex items-center gap-2">
@@ -3223,19 +3645,35 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                     <input
                       type="range"
                       min={0}
-                      max={146}
+                      max={180}
                       value={neutrons}
                       onChange={(e) => setNeutrons(Number(e.target.value))}
                       className="flex-1 accent-sky-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
                     />
                     <button
                       onClick={() => {
-                        setNeutrons(neutrons + 1);
+                        setNeutrons(Math.min(180, neutrons + 1));
                         soundFx.playReactionStep();
                       }}
                       className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
                     >
                       <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-800/80 text-[11px]">
+                    <span className="text-slate-400 flex items-center gap-1.5 font-mono">
+                      <span>Nuclide:</span>
+                      <IsotopeNuclide massNumber={massNumber} symbol={matchedElement.symbol} className="text-sky-300 font-bold" />
+                      <span className="text-slate-400 truncate max-w-[140px] font-sans">
+                        ({currentIsotope.name || `${matchedElement.symbol}-${massNumber}`})
+                      </span>
+                    </span>
+                    <button
+                      onClick={() => setActiveTab('isotopes')}
+                      className="text-sky-400 hover:text-sky-300 font-medium hover:underline flex items-center gap-0.5 text-[11px]"
+                    >
+                      <span>Isotopes Tab</span>
+                      <span>→</span>
                     </button>
                   </div>
                 </div>
@@ -3263,14 +3701,14 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
                     <input
                       type="range"
                       min={0}
-                      max={92}
+                      max={118}
                       value={electrons}
                       onChange={(e) => setElectrons(Number(e.target.value))}
                       className="flex-1 accent-emerald-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
                     />
                     <button
                       onClick={() => {
-                        setElectrons(electrons + 1);
+                        setElectrons(Math.min(118, electrons + 1));
                         soundFx.playReactionStep();
                       }}
                       className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
@@ -3470,42 +3908,260 @@ export const AtomSimulator3D: React.FC<AtomSimulator3DProps> = ({
 
             {/* Tab 3: Isotopes */}
             {activeTab === 'isotopes' && (
-              <div className="flex flex-col gap-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-200">Current Isotope:</span>
-                    <span className="font-mono px-2 py-0.5 rounded bg-slate-800 text-sky-300 font-bold">
-                      {matchedElement.symbol}-{massNumber}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 font-medium">
-                    <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className={nuclearStability.color}>{nuclearStability.status}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-1">
-                  <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-slate-400 block text-[11px] mb-1">Naturally Occurring Isotopes:</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {matchedElement.stableIsotopes?.map((iso, i) => (
-                        <button
-                          key={i}
-                          onClick={() => {
-                            setNeutrons(iso.massNumber - matchedElement.atomicNumber);
-                            soundFx.playReactionStep();
-                          }}
-                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px]"
-                        >
-                          {matchedElement.symbol}-{iso.massNumber} ({iso.abundancePercent}%)
-                        </button>
-                      ))}
+              <div className="flex flex-col gap-2.5 text-xs">
+                {/* Active Isotope Overview Bar */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="min-w-[3.75rem] h-12 px-2.5 rounded-xl flex items-center justify-center font-bold text-white shadow-md border shrink-0 select-none transition-all"
+                      style={{
+                        backgroundColor: matchedElement.cpkColor === '#FFFFFF' ? '#334155' : matchedElement.cpkColor,
+                        borderColor: 'rgba(255,255,255,0.25)',
+                      }}
+                      title={`Nuclide ${currentIsotope.name || `${matchedElement.symbol}-${massNumber}`} (A = ${massNumber}, Z = ${protons})`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex flex-col items-end justify-center leading-none">
+                          <span className="text-xs font-black leading-none text-sky-200 tabular-nums tracking-tight">
+                            {massNumber}
+                          </span>
+                          <span className="text-[10px] font-bold leading-none text-white/70 tabular-nums tracking-tight mt-[1px]">
+                            {protons}
+                          </span>
+                        </div>
+                        <span className="text-2xl leading-none font-black tracking-tight">
+                          {matchedElement.symbol}
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <IsotopeNuclide massNumber={massNumber} symbol={matchedElement.symbol} size="lg" className="text-sky-300 font-bold" />
+                        <span className="text-xs text-slate-300 font-semibold">{currentIsotope.name || `${matchedElement.name}-${massNumber}`}</span>
+                        {currentIsotope.isStable ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                            Stable Nuclide
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold">
+                            <Radiation className="w-3 h-3 text-amber-400 animate-pulse" />
+                            Radioactive Isotope
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 mt-1 flex-wrap">
+                        <span className="text-rose-400 font-semibold">Z = {protons} p⁺</span>
+                        <span>•</span>
+                        <span className="text-sky-400 font-semibold">N = {neutrons} n⁰</span>
+                        <span>•</span>
+                        <span className="text-slate-300 font-semibold">A = {massNumber} nucleons</span>
+                        <span>•</span>
+                        <span className="text-purple-300">N/Z = {(neutrons / Math.max(protons, 1)).toFixed(3)}</span>
+                        <span>•</span>
+                        <span className="text-cyan-300" title="Nuclear radius R ≈ 1.25 × A^(1/3) femtometers">
+                          R ≈ {(1.25 * Math.cbrt(Math.max(1, massNumber))).toFixed(2)} fm
+                        </span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800/80 text-[11px] text-slate-400">
-                    <span className="font-medium text-slate-300 block mb-0.5">Nuclear Physics Summary:</span>
-                    Proton-to-Neutron ratio is {(neutrons / Math.max(protons, 1)).toFixed(2)}. The strong nuclear force between nucleons overcomes proton electrostatic repulsion.
+                  <div className="flex items-center gap-2 flex-wrap justify-between md:justify-end">
+                    {/* Stability indicator pill */}
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px]">
+                      <Activity className="w-3.5 h-3.5 text-sky-400" />
+                      <span className={nuclearStability.color}>{nuclearStability.status}</span>
+                    </div>
+
+                    {/* Quick Reset to standard atomic weight mass */}
+                    {neutrons !== Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber && (
+                      <button
+                        onClick={() => {
+                          setNeutrons(Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber);
+                          soundFx.playReactionStep();
+                        }}
+                        className="px-2 py-1 rounded-lg bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/40 text-[11px] font-mono transition-all"
+                        title="Reset to natural standard isotope"
+                      >
+                        Reset Std ({Math.round(matchedElement.atomicMass) - matchedElement.atomicNumber} n⁰)
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Filter and Isotope Grid Container */}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                      <span className="font-semibold text-slate-300">Known Isotopes of {matchedElement.name}:</span>
+                      <span className="font-mono text-slate-500">({elementIsotopes.length} documented)</span>
+                    </div>
+
+                    {/* Filter buttons */}
+                    <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px] font-mono">
+                      {(['all', 'stable', 'radioactive'] as const).map((filter) => {
+                        const count =
+                          filter === 'all'
+                            ? elementIsotopes.length
+                            : filter === 'stable'
+                            ? elementIsotopes.filter((i) => i.isStable).length
+                            : elementIsotopes.filter((i) => !i.isStable).length;
+                        return (
+                          <button
+                            key={filter}
+                            onClick={() => setIsotopeFilter(filter)}
+                            className={`px-2 py-0.5 rounded capitalize transition-all ${
+                              isotopeFilter === filter
+                                ? filter === 'radioactive'
+                                  ? 'bg-amber-500/30 text-amber-200 font-bold border border-amber-500/40'
+                                  : filter === 'stable'
+                                  ? 'bg-emerald-500/30 text-emerald-200 font-bold border border-emerald-500/40'
+                                  : 'bg-sky-500/30 text-sky-200 font-bold border border-sky-500/40'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {filter} ({count})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Grid of Isotope Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-60 overflow-y-auto pr-1">
+                    {filteredIsotopes.map((iso, idx) => {
+                      const isSelected = iso.massNumber === massNumber;
+                      return (
+                        <div
+                          key={iso.id || `${iso.symbol}-${iso.massNumber}-${iso.name || ''}-${idx}`}
+                          onClick={() => handleSelectIsotope(iso)}
+                          className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                            isSelected
+                              ? 'bg-sky-950/40 border-sky-500/80 shadow-lg shadow-sky-500/10 ring-1 ring-sky-500/40'
+                              : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-900/80 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="px-2 py-0.5 rounded-lg bg-slate-900/90 border border-slate-800 shrink-0">
+                                <IsotopeNuclide
+                                  massNumber={iso.massNumber}
+                                  symbol={matchedElement.symbol}
+                                  size="sm"
+                                  className="font-bold text-sky-300"
+                                />
+                              </div>
+                              <span className="text-xs font-semibold text-slate-200 truncate">
+                                {iso.name || `${matchedElement.symbol}-${iso.massNumber}`}
+                              </span>
+                            </div>
+                            {iso.isStable ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold shrink-0">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                                Stable
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold shrink-0">
+                                <Radiation className="w-2.5 h-2.5 text-amber-400" />
+                                Radioactive
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-1 text-[10px] font-mono">
+                            <div className="bg-slate-900/90 p-1 rounded border border-slate-800/80">
+                              <span className="text-slate-500 block text-[9px]">Neutrons (N)</span>
+                              <span className="text-sky-400 font-bold">{iso.neutrons} n⁰</span>
+                            </div>
+                            <div className="bg-slate-900/90 p-1 rounded border border-slate-800/80">
+                              <span className="text-slate-500 block text-[9px]">Half-Life (t½)</span>
+                              <span className={iso.isStable ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold truncate block'}>
+                                {iso.halfLife || (iso.isStable ? 'Stable' : 'Decays')}
+                              </span>
+                            </div>
+                            {iso.abundancePercent !== undefined && iso.abundancePercent > 0 && (
+                              <div className="bg-slate-900/90 p-1 rounded border border-slate-800/80">
+                                <span className="text-slate-500 block text-[9px]">Abundance</span>
+                                <span className="text-slate-200 font-bold">{iso.abundancePercent}%</span>
+                              </div>
+                            )}
+                            {iso.decayMode && (
+                              <div className="bg-slate-900/90 p-1 rounded border border-slate-800/80">
+                                <span className="text-slate-500 block text-[9px]">Decay Mode</span>
+                                <span className="text-slate-200 font-semibold truncate block">{iso.decayMode}</span>
+                              </div>
+                            )}
+                            {iso.decayProduct && (
+                              <div className="bg-slate-900/90 p-1 rounded border border-slate-800/80 col-span-2">
+                                <span className="text-slate-500 block text-[9px]">Daughter Nuclide</span>
+                                <span className="text-purple-300 font-bold">
+                                  <FormattedNuclideString text={iso.decayProduct} />
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {iso.commonUse && (
+                            <p className="text-[10px] text-slate-300 leading-snug line-clamp-2 bg-slate-900/40 p-1 rounded border border-slate-800/50">
+                              <span className="text-slate-500 font-medium">Use: </span>
+                              {iso.commonUse}
+                            </p>
+                          )}
+
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 mt-0.5">
+                            <span className="text-[10px] font-mono text-slate-500">
+                              A = {iso.massNumber} u
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectIsotope(iso);
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                                isSelected
+                                  ? 'bg-sky-500 text-white font-bold shadow-sm'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                              }`}
+                            >
+                              {isSelected ? 'Active in Viewport' : 'Select Isotope'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Nuclear Physics Deep Dive Card */}
+                <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      Valley of Nuclear Stability
+                    </span>
+                    <p className="text-slate-400 leading-relaxed text-[10px]">
+                      Light stable nuclei require N/Z ≈ 1.0 (e.g. ¹²C, ¹⁶O). As Z grows, electrostatic Coulomb repulsion between protons necessitates a neutron excess (N/Z up to 1.54 in ²⁰⁸Pb). Elements with Z &gt; 82 (Lead) have no stable isotopes!
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1">
+                      <Atom className="w-3.5 h-3.5 text-sky-400" />
+                      Nuclear Volume & Density
+                    </span>
+                    <p className="text-slate-400 leading-relaxed text-[10px]">
+                      The strong nuclear force acts at femtometer range with hard-core repulsion. The nucleus behaves as an incompressible liquid drop with volume V ∝ A and constant density ≈ 2.3×10¹⁷ kg/m³, packed in 3D face-centered cubic lattice.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1">
+                      <Radiation className="w-3.5 h-3.5 text-amber-400" />
+                      Radioactive Decay Modes
+                    </span>
+                    <p className="text-slate-400 leading-relaxed text-[10px]">
+                      Neutron-rich isotopes undergo β⁻ decay (n → p⁺ + e⁻ + ν̄ₑ). Proton-rich nuclei decay via β⁺ or electron capture (p⁺ → n + e⁺ + νₑ). Superheavy nuclei shed mass via α emission (⁴He²⁺) or spontaneous fission.
+                    </p>
                   </div>
                 </div>
               </div>
