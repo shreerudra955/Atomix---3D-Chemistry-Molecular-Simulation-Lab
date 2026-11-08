@@ -330,7 +330,7 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     </div>
                     <p className="text-[11.5px] leading-relaxed text-slate-300">
-                      Construct custom molecules atom-by-atom in full 3D space. The built-in force-directed VSEPR engine continuously relaxes atomic coordinates toward true equilibrium bond angles and lengths with real-time octet/valence verification.
+                      Construct custom molecules atom-by-atom in full 3D space with <strong>real-time official IUPAC name determination</strong>, Hill formulas, molar masses, force-directed VSEPR geometry relaxation toward equilibrium bond angles, and valence octet verification.
                     </p>
                   </div>
 
