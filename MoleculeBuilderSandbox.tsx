@@ -21,7 +21,9 @@ import {
   Info,
   Zap,
   Compass,
+  BookOpen,
 } from 'lucide-react';
+import { determineMoleculeIdentity, MoleculeIdentity } from '../utils/iupacNaming';
 
 interface MoleculeBuilderSandboxProps {
   theme?: 'dark' | 'light';
@@ -579,15 +581,31 @@ export function getNextVSEPRBondPosition(
   if (existingVectors.length === 1) {
     const v1 = existingVectors[0];
     let up = new THREE.Vector3(0, 1, 0);
-    if (Math.abs(v1.dot(up)) > 0.9) up = new THREE.Vector3(1, 0, 0);
+    if (Math.abs(v1.dot(up)) > 0.85) up = new THREE.Vector3(0, 0, 1);
     const perp = up.clone().cross(v1).normalize();
 
-    if (vsepr.idealAngleDeg >= 170) {
+    // Determine target angle for 2nd bond on parentAtom based on prospective steric number & lone pairs
+    let targetAngleDeg = 109.47;
+    const el = parentAtom.element;
+    const formalCharge = parentAtom.formalCharge || 0;
+    if (el === 'O' || el === 'S') {
+      targetAngleDeg = formalCharge > 0 ? 107.0 : 104.45;
+    } else if (el === 'N' || el === 'P') {
+      targetAngleDeg = formalCharge > 0 ? 109.47 : 107.0;
+    } else if (el === 'C' || el === 'Si') {
+      targetAngleDeg = 109.47;
+    } else if (el === 'B') {
+      targetAngleDeg = 120.0;
+    } else if (el === 'Be' || vsepr.name.startsWith('Linear')) {
+      targetAngleDeg = 180.0;
+    }
+
+    if (targetAngleDeg >= 170) {
       const dir = v1.clone().negate();
       return [parentPos.x + dir.x * bondLength, parentPos.y + dir.y * bondLength, parentPos.z + dir.z * bondLength];
     }
 
-    const angleRad = (vsepr.idealAngleDeg * Math.PI) / 180;
+    const angleRad = (targetAngleDeg * Math.PI) / 180;
     const dir = v1.clone().applyAxisAngle(perp, angleRad).normalize();
     return [parentPos.x + dir.x * bondLength, parentPos.y + dir.y * bondLength, parentPos.z + dir.z * bondLength];
   }
@@ -595,15 +613,21 @@ export function getNextVSEPRBondPosition(
   if (existingVectors.length === 2) {
     const v1 = existingVectors[0];
     const v2 = existingVectors[1];
-    const normal = v1.clone().cross(v2).normalize();
+    let normal = v1.clone().cross(v2).normalize();
+    if (normal.lengthSq() < 0.01) {
+      let up = new THREE.Vector3(0, 1, 0);
+      if (Math.abs(v1.dot(up)) > 0.85) up = new THREE.Vector3(0, 0, 1);
+      normal = v1.clone().cross(up).normalize();
+    }
     const bisector = v1.clone().add(v2).normalize();
 
-    if (vsepr.name.startsWith('Trigonal Planar')) {
+    if (vsepr.name.startsWith('Trigonal Planar') || parentAtom.element === 'B') {
       const dir = bisector.clone().negate().normalize();
       return [parentPos.x + dir.x * bondLength, parentPos.y + dir.y * bondLength, parentPos.z + dir.z * bondLength];
     }
 
-    const dir = bisector.clone().negate().addScaledVector(normal, 1.1).normalize();
+    // 3rd bond on tetrahedral or pyramidal center (e.g. NH3 or CH4)
+    const dir = bisector.clone().negate().addScaledVector(normal, 0.72).normalize();
     return [parentPos.x + dir.x * bondLength, parentPos.y + dir.y * bondLength, parentPos.z + dir.z * bondLength];
   }
 
@@ -637,7 +661,41 @@ export function getNextVSEPRBondPosition(
   return [parentPos.x + bestDir.x * bondLength, parentPos.y + bestDir.y * bondLength, parentPos.z + bestDir.z * bondLength];
 }
 
+// Optimal equilibrium covalent bond distances in Ångströms
+export function getTargetBondLength(el1: string, el2: string, order: number = 1): number {
+  if (el1 === 'H' || el2 === 'H') {
+    const other = el1 === 'H' ? el2 : el1;
+    if (other === 'O') return 1.00;
+    if (other === 'N') return 1.02;
+    if (other === 'C') return 1.10;
+    return 1.05;
+  }
+  if (order === 3) return 1.20;
+  if (order === 2) return 1.34;
+  return 1.48;
+}
+
+// Helper to center the entire molecular assembly at origin (0, 0, 0)
+function recenterMolecule(molAtoms: MolecularAtom[]) {
+  if (molAtoms.length === 0) return;
+  let cx = 0, cy = 0, cz = 0;
+  molAtoms.forEach((a) => {
+    cx += a.position[0];
+    cy += a.position[1];
+    cz += a.position[2];
+  });
+  cx /= molAtoms.length;
+  cy /= molAtoms.length;
+  cz /= molAtoms.length;
+  molAtoms.forEach((a) => {
+    a.position[0] = Number((a.position[0] - cx).toFixed(4));
+    a.position[1] = Number((a.position[1] - cy).toFixed(4));
+    a.position[2] = Number((a.position[2] - cz).toFixed(4));
+  });
+}
+
 // Function to analytically fix and snap all bond angles to exact VSEPR geometries
+// without distorting or ripping multi-center molecules apart
 export function fixAllBondAngles(
   currentAtoms: MolecularAtom[],
   currentBonds: MolecularBond[],
@@ -657,7 +715,10 @@ export function fixAllBondAngles(
 
   if (centers.length === 0) return nextAtoms;
 
-  centers.forEach((center) => {
+  // Tier 1: Single-center systems (Water, Ammonia, Methane, BF3, CO2, SF6, etc.)
+  // Clean analytical VSEPR projection with greedy permutation matching (never crosses bonds)
+  if (centers.length === 1) {
+    const center = centers[0];
     const connectedBonds = currentBonds.filter((b) => b.from === center.id || b.to === center.id);
     const neighborIds = connectedBonds.map((b) => (b.from === center.id ? b.to : b.from));
     const neighbors = neighborIds
@@ -665,110 +726,352 @@ export function fixAllBondAngles(
       .filter((a): a is MolecularAtom => !!a);
 
     const k = neighbors.length;
-    if (k < 2) return;
+    if (k >= 2) {
+      const vsepr = getAtomVSEPRGeometry(center, nextAtoms, currentBonds);
+      const centerPos = new THREE.Vector3(...center.position);
 
-    const vsepr = getAtomVSEPRGeometry(center, nextAtoms, currentBonds);
-    const centerPos = new THREE.Vector3(...center.position);
+      if (k === 2) {
+        const a1 = neighbors[0];
+        const a2 = neighbors[1];
+        const b1 = connectedBonds.find((b) => (b.from === a1.id && b.to === center.id) || (b.to === a1.id && b.from === center.id));
+        const b2 = connectedBonds.find((b) => (b.from === a2.id && b.to === center.id) || (b.to === a2.id && b.from === center.id));
+        const d1 = getTargetBondLength(center.element, a1.element, b1?.order || 1);
+        const d2 = getTargetBondLength(center.element, a2.element, b2?.order || 1);
 
-    // 2-Bond Systems: Linear (180°), Bent 120°, Bent 104.5°
-    if (k === 2) {
-      const a1 = neighbors[0];
-      const a2 = neighbors[1];
-      const v1 = new THREE.Vector3(...a1.position).sub(centerPos);
-      const v2 = new THREE.Vector3(...a2.position).sub(centerPos);
+        const v1 = new THREE.Vector3(...a1.position).sub(centerPos);
+        const v2 = new THREE.Vector3(...a2.position).sub(centerPos);
 
-      if (vsepr.idealAngleDeg >= 170) {
-        const dir1 = v1.lengthSq() > 0.01 ? v1.normalize() : new THREE.Vector3(1, 0, 0);
-        a1.position = [centerPos.x + dir1.x * targetBondLength, centerPos.y + dir1.y * targetBondLength, centerPos.z + dir1.z * targetBondLength];
-        a2.position = [centerPos.x - dir1.x * targetBondLength, centerPos.y - dir1.y * targetBondLength, centerPos.z - dir1.z * targetBondLength];
-      } else {
-        const theta0Rad = (vsepr.idealAngleDeg * Math.PI) / 180;
-        const halfAngle = theta0Rad / 2;
+        if (vsepr.idealAngleDeg >= 170) {
+          // Linear: 180°
+          const dir1 = v1.lengthSq() > 0.01 ? v1.normalize() : new THREE.Vector3(1, 0, 0);
+          a1.position = [centerPos.x + dir1.x * d1, centerPos.y + dir1.y * d1, centerPos.z + dir1.z * d1];
+          a2.position = [centerPos.x - dir1.x * d2, centerPos.y - dir1.y * d2, centerPos.z - dir1.z * d2];
+          recenterMolecule(nextAtoms);
+          return nextAtoms;
+        } else {
+          // Bent: 104.5° (Water) or 120° (SO2)
+          const theta0 = (vsepr.idealAngleDeg * Math.PI) / 180;
+          const halfAngle = theta0 / 2;
 
-        let bisector = v1.clone().normalize().add(v2.clone().normalize()).normalize();
-        if (bisector.lengthSq() < 0.01) {
-          bisector = new THREE.Vector3(0, -1, 0);
+          let u1 = v1.clone().normalize();
+          let u2 = v2.clone().normalize();
+          if (u1.lengthSq() < 0.1) u1 = new THREE.Vector3(1, 0, 0);
+          if (u2.lengthSq() < 0.1) u2 = new THREE.Vector3(-0.5, 0.866, 0);
+
+          const dot12 = Math.max(-1, Math.min(1, u1.dot(u2)));
+          let bisector: THREE.Vector3;
+          let normal: THREE.Vector3;
+
+          if (dot12 < -0.96) {
+            // Near 180° collinear: build an orthogonal bend plane
+            let ref = new THREE.Vector3(0, 1, 0);
+            if (Math.abs(u1.dot(ref)) > 0.85) ref = new THREE.Vector3(0, 0, 1);
+            const perp = ref.clone().cross(u1).normalize();
+            bisector = perp;
+            normal = u1.clone().cross(perp).normalize();
+          } else if (dot12 > 0.96) {
+            // Near 0° collinear: separate them
+            let ref = new THREE.Vector3(0, 1, 0);
+            if (Math.abs(u1.dot(ref)) > 0.85) ref = new THREE.Vector3(0, 0, 1);
+            bisector = u1.clone();
+            normal = ref.clone().cross(u1).normalize();
+          } else {
+            bisector = u1.clone().add(u2).normalize();
+            normal = u1.clone().cross(u2).normalize();
+            if (normal.lengthSq() < 0.01) {
+              let ref = new THREE.Vector3(0, 1, 0);
+              if (Math.abs(bisector.dot(ref)) > 0.85) ref = new THREE.Vector3(0, 0, 1);
+              normal = bisector.clone().cross(ref).normalize();
+            }
+          }
+
+          const optA = bisector.clone().applyAxisAngle(normal, -halfAngle).normalize();
+          const optB = bisector.clone().applyAxisAngle(normal, halfAngle).normalize();
+
+          let dir1 = optA;
+          let dir2 = optB;
+          if (u1.dot(optA) + u2.dot(optB) < u1.dot(optB) + u2.dot(optA)) {
+            dir1 = optB;
+            dir2 = optA;
+          }
+
+          a1.position = [
+            Number((centerPos.x + dir1.x * d1).toFixed(4)),
+            Number((centerPos.y + dir1.y * d1).toFixed(4)),
+            Number((centerPos.z + dir1.z * d1).toFixed(4)),
+          ];
+          a2.position = [
+            Number((centerPos.x + dir2.x * d2).toFixed(4)),
+            Number((centerPos.y + dir2.y * d2).toFixed(4)),
+            Number((centerPos.z + dir2.z * d2).toFixed(4)),
+          ];
+          recenterMolecule(nextAtoms);
+          return nextAtoms;
+        }
+      } else if (k === 3) {
+        // Trigonal Planar (120°) or Trigonal Pyramidal (107°)
+        const isPyramidal = vsepr.name.startsWith('Trigonal Pyramidal');
+        const vList = neighbors.map((nbr) => new THREE.Vector3(...nbr.position).sub(centerPos));
+
+        let normal = new THREE.Vector3();
+        if (vList[0].lengthSq() > 0.01 && vList[1].lengthSq() > 0.01) {
+          normal.crossVectors(vList[0], vList[1]).normalize();
+        }
+        if (normal.lengthSq() < 0.01) normal.set(0, 0, 1);
+
+        let refAxis = vList[0].clone().sub(normal.clone().multiplyScalar(vList[0].dot(normal))).normalize();
+        if (refAxis.lengthSq() < 0.01) refAxis.set(1, 0, 0);
+        const orthoAxis = normal.clone().cross(refAxis).normalize();
+
+        const idealDirs: THREE.Vector3[] = [];
+        if (isPyramidal) {
+          const alpha = (68.16 * Math.PI) / 180; // 107.0° pairwise
+          const sinA = Math.sin(alpha);
+          const cosA = Math.cos(alpha);
+          for (let phi = 0; phi < 3; phi++) {
+            const angle = (phi * 2 * Math.PI) / 3;
+            idealDirs.push(
+              refAxis
+                .clone()
+                .multiplyScalar(sinA * Math.cos(angle))
+                .add(orthoAxis.clone().multiplyScalar(sinA * Math.sin(angle)))
+                .add(normal.clone().multiplyScalar(-cosA))
+                .normalize()
+            );
+          }
+        } else {
+          for (let phi = 0; phi < 3; phi++) {
+            const angle = (phi * 2 * Math.PI) / 3;
+            idealDirs.push(
+              refAxis
+                .clone()
+                .multiplyScalar(Math.cos(angle))
+                .add(orthoAxis.clone().multiplyScalar(Math.sin(angle)))
+                .normalize()
+            );
+          }
         }
 
-        let normal = v1.clone().cross(v2).normalize();
-        if (normal.lengthSq() < 0.01) {
-          let up = new THREE.Vector3(0, 0, 1);
-          if (Math.abs(bisector.dot(up)) > 0.9) up = new THREE.Vector3(0, 1, 0);
-          normal = bisector.clone().cross(up).normalize();
-        }
+        const used = new Set<number>();
+        neighbors.forEach((nbr) => {
+          const v = new THREE.Vector3(...nbr.position).sub(centerPos).normalize();
+          let bestIdx = -1;
+          let bestDot = -999;
+          idealDirs.forEach((dir, idx) => {
+            if (used.has(idx)) return;
+            const dot = v.dot(dir);
+            if (dot > bestDot) {
+              bestDot = dot;
+              bestIdx = idx;
+            }
+          });
+          if (bestIdx !== -1) {
+            used.add(bestIdx);
+            const dist = getTargetBondLength(center.element, nbr.element, 1);
+            const d = idealDirs[bestIdx];
+            nbr.position = [
+              Number((centerPos.x + d.x * dist).toFixed(4)),
+              Number((centerPos.y + d.y * dist).toFixed(4)),
+              Number((centerPos.z + d.z * dist).toFixed(4)),
+            ];
+          }
+        });
+        recenterMolecule(nextAtoms);
+        return nextAtoms;
+      } else if (k === 4) {
+        // Tetrahedral (109.47°)
+        const invSqrt3 = 1 / Math.sqrt(3);
+        const baseTetra = [
+          new THREE.Vector3(invSqrt3, invSqrt3, invSqrt3),
+          new THREE.Vector3(invSqrt3, -invSqrt3, -invSqrt3),
+          new THREE.Vector3(-invSqrt3, invSqrt3, -invSqrt3),
+          new THREE.Vector3(-invSqrt3, -invSqrt3, invSqrt3),
+        ];
 
-        const dir1 = bisector.clone().applyAxisAngle(normal, -halfAngle).normalize();
-        const dir2 = bisector.clone().applyAxisAngle(normal, halfAngle).normalize();
+        let v0 = new THREE.Vector3(...neighbors[0].position).sub(centerPos);
+        if (v0.lengthSq() < 0.01) v0 = new THREE.Vector3(0, 1, 0);
+        else v0.normalize();
 
-        a1.position = [centerPos.x + dir1.x * targetBondLength, centerPos.y + dir1.y * targetBondLength, centerPos.z + dir1.z * targetBondLength];
-        a2.position = [centerPos.x + dir2.x * targetBondLength, centerPos.y + dir2.y * targetBondLength, centerPos.z + dir2.z * targetBondLength];
-      }
-    }
-    // 3-Bond Systems: Trigonal Planar (120°) or Trigonal Pyramidal (107°)
-    else if (k === 3) {
-      const a1 = neighbors[0];
-      const a2 = neighbors[1];
-      const a3 = neighbors[2];
-      const v1 = new THREE.Vector3(...a1.position).sub(centerPos);
-      const v2 = new THREE.Vector3(...a2.position).sub(centerPos);
+        const rotQuat = new THREE.Quaternion().setFromUnitVectors(baseTetra[0], v0);
+        baseTetra.forEach((td) => td.applyQuaternion(rotQuat));
 
-      let normal = v1.clone().cross(v2).normalize();
-      if (normal.lengthSq() < 0.01) normal = new THREE.Vector3(0, 0, 1);
+        const perms: number[][] = [];
+        const p = [0, 1, 2, 3];
+        const permute = (arr: number[], m: number[] = []) => {
+          if (arr.length === 0) perms.push(m);
+          else {
+            for (let i = 0; i < arr.length; i++) {
+              const curr = arr.slice();
+              const next = curr.splice(i, 1);
+              permute(curr.slice(), m.concat(next));
+            }
+          }
+        };
+        permute(p);
 
-      let dir1 = v1.lengthSq() > 0.01 ? v1.clone().normalize() : new THREE.Vector3(1, 0, 0);
-
-      if (vsepr.name.startsWith('Trigonal Pyramidal')) {
-        const alpha = (68.16 * Math.PI) / 180; // for 107.0° between bonds
-        const sinA = Math.sin(alpha);
-        const cosA = Math.cos(alpha);
-
-        let perp1 = dir1.clone().sub(normal.clone().multiplyScalar(dir1.dot(normal))).normalize();
-        if (perp1.lengthSq() < 0.01) perp1 = new THREE.Vector3(1, 0, 0);
-        const perp2 = normal.clone().cross(perp1).normalize();
-
-        const dirs = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3].map((phi) => {
-          return perp1
-            .clone()
-            .multiplyScalar(sinA * Math.cos(phi))
-            .add(perp2.clone().multiplyScalar(sinA * Math.sin(phi)))
-            .add(normal.clone().multiplyScalar(-cosA))
-            .normalize();
+        const nbrDirs = neighbors.map((nbr) => {
+          const v = new THREE.Vector3(...nbr.position).sub(centerPos);
+          return v.lengthSq() > 0.01 ? v.normalize() : new THREE.Vector3(1, 0, 0);
         });
 
-        a1.position = [centerPos.x + dirs[0].x * targetBondLength, centerPos.y + dirs[0].y * targetBondLength, centerPos.z + dirs[0].z * targetBondLength];
-        a2.position = [centerPos.x + dirs[1].x * targetBondLength, centerPos.y + dirs[1].y * targetBondLength, centerPos.z + dirs[1].z * targetBondLength];
-        a3.position = [centerPos.x + dirs[2].x * targetBondLength, centerPos.y + dirs[2].y * targetBondLength, centerPos.z + dirs[2].z * targetBondLength];
-      } else {
-        dir1 = dir1.sub(normal.clone().multiplyScalar(dir1.dot(normal))).normalize();
-        const dir2 = dir1.clone().applyAxisAngle(normal, (2 * Math.PI) / 3).normalize();
-        const dir3 = dir1.clone().applyAxisAngle(normal, (4 * Math.PI) / 3).normalize();
+        let bestPerm = perms[0];
+        let maxScore = -99999;
+        for (const perm of perms) {
+          let score = 0;
+          for (let i = 0; i < 4; i++) {
+            score += nbrDirs[i].dot(baseTetra[perm[i]]);
+          }
+          if (score > maxScore) {
+            maxScore = score;
+            bestPerm = perm;
+          }
+        }
 
-        a1.position = [centerPos.x + dir1.x * targetBondLength, centerPos.y + dir1.y * targetBondLength, centerPos.z + dir1.z * targetBondLength];
-        a2.position = [centerPos.x + dir2.x * targetBondLength, centerPos.y + dir2.y * targetBondLength, centerPos.z + dir2.z * targetBondLength];
-        a3.position = [centerPos.x + dir3.x * targetBondLength, centerPos.y + dir3.y * targetBondLength, centerPos.z + dir3.z * targetBondLength];
+        for (let i = 0; i < 4; i++) {
+          const nbr = neighbors[i];
+          const dist = getTargetBondLength(center.element, nbr.element, 1);
+          const d = baseTetra[bestPerm[i]];
+          nbr.position = [
+            Number((centerPos.x + d.x * dist).toFixed(4)),
+            Number((centerPos.y + d.y * dist).toFixed(4)),
+            Number((centerPos.z + d.z * dist).toFixed(4)),
+          ];
+        }
+        recenterMolecule(nextAtoms);
+        return nextAtoms;
       }
     }
-    // 4-Bond Systems: Tetrahedral (109.47°)
-    else if (k === 4) {
-      const invSqrt3 = 1 / Math.sqrt(3);
-      const tetraDirs = [
-        new THREE.Vector3(invSqrt3, invSqrt3, invSqrt3),
-        new THREE.Vector3(invSqrt3, -invSqrt3, -invSqrt3),
-        new THREE.Vector3(-invSqrt3, invSqrt3, -invSqrt3),
-        new THREE.Vector3(-invSqrt3, -invSqrt3, invSqrt3),
-      ];
+  }
 
-      const v0 = new THREE.Vector3(...neighbors[0].position).sub(centerPos).normalize();
-      const rotQuat = new THREE.Quaternion().setFromUnitVectors(tetraDirs[0], v0);
-      tetraDirs.forEach((td) => td.applyQuaternion(rotQuat));
+  // Tier 2: Multi-center systems (Chains, rings, branched molecules, peptides)
+  // Simultaneous in-memory coupled distance & VSEPR angle optimization
+  // Preserves full molecular topology and prevents ripped or colliding atoms!
+  const posMap = new Map<string, THREE.Vector3>();
+  nextAtoms.forEach((a) => posMap.set(a.id, new THREE.Vector3(...a.position)));
 
-      neighbors.forEach((nbr, idx) => {
-        const d = tetraDirs[idx];
-        nbr.position = [centerPos.x + d.x * targetBondLength, centerPos.y + d.y * targetBondLength, centerPos.z + d.z * targetBondLength];
-      });
+  const exclusion12_13 = new Set<string>();
+  currentBonds.forEach((b) => {
+    exclusion12_13.add(`${b.from}_${b.to}`);
+    exclusion12_13.add(`${b.to}_${b.from}`);
+  });
+  nextAtoms.forEach((c) => {
+    const cBonds = currentBonds.filter((b) => b.from === c.id || b.to === c.id);
+    const nIds = cBonds.map((b) => (b.from === c.id ? b.to : b.from));
+    for (let i = 0; i < nIds.length; i++) {
+      for (let j = i + 1; j < nIds.length; j++) {
+        exclusion12_13.add(`${nIds[i]}_${nIds[j]}`);
+        exclusion12_13.add(`${nIds[j]}_${nIds[i]}`);
+      }
     }
   });
 
+  const optimizationRounds = 120;
+  for (let step = 0; step < optimizationRounds; step++) {
+    // 1. Bond Length Spring Constraints
+    currentBonds.forEach((bond) => {
+      const p1 = posMap.get(bond.from);
+      const p2 = posMap.get(bond.to);
+      if (!p1 || !p2) return;
+
+      const a1 = nextAtoms.find((a) => a.id === bond.from);
+      const a2 = nextAtoms.find((a) => a.id === bond.to);
+      const targetLen = getTargetBondLength(a1?.element || 'C', a2?.element || 'C', bond.order);
+
+      const delta = p2.clone().sub(p1);
+      const len = delta.length();
+      if (len < 0.001) return;
+
+      const diff = len - targetLen;
+      const correction = delta.normalize().multiplyScalar(diff * 0.4);
+      p1.add(correction);
+      p2.sub(correction);
+    });
+
+    // 2. Harmonic VSEPR Angle Restoring Torques
+    nextAtoms.forEach((center) => {
+      const cBonds = currentBonds.filter((b) => b.from === center.id || b.to === center.id);
+      if (cBonds.length < 2) return;
+
+      const cPos = posMap.get(center.id);
+      if (!cPos) return;
+
+      const neighborIds = cBonds.map((b) => (b.from === center.id ? b.to : b.from));
+      const vsepr = getAtomVSEPRGeometry(center, nextAtoms, currentBonds);
+      const targetAngleRad = (vsepr.idealAngleDeg * Math.PI) / 180;
+
+      for (let i = 0; i < neighborIds.length; i++) {
+        for (let j = i + 1; j < neighborIds.length; j++) {
+          const pA = posMap.get(neighborIds[i]);
+          const pB = posMap.get(neighborIds[j]);
+          if (!pA || !pB) continue;
+
+          const vA = pA.clone().sub(cPos);
+          const vB = pB.clone().sub(cPos);
+          const lenA = vA.length();
+          const lenB = vB.length();
+          if (lenA < 0.1 || lenB < 0.1) continue;
+
+          const uA = vA.multiplyScalar(1 / lenA);
+          const uB = vB.multiplyScalar(1 / lenB);
+          const dot = Math.max(-0.9999, Math.min(0.9999, uA.dot(uB)));
+          const currentAngle = Math.acos(dot);
+
+          let pairTarget = targetAngleRad;
+          if (vsepr.name.startsWith('Octahedral') || vsepr.name.startsWith('Square Planar')) {
+            pairTarget = currentAngle > (135 * Math.PI) / 180 ? Math.PI : Math.PI / 2;
+          }
+
+          const angleError = currentAngle - pairTarget;
+          if (Math.abs(angleError) < 0.002) continue;
+
+          const sinVal = Math.sqrt(Math.max(1e-6, 1 - dot * dot));
+          const nA = uB.clone().addScaledVector(uA, -dot).multiplyScalar(1 / sinVal);
+          const nB = uA.clone().addScaledVector(uB, -dot).multiplyScalar(1 / sinVal);
+
+          const torque = 0.22 * angleError;
+          pA.addScaledVector(nA, torque);
+          pB.addScaledVector(nB, torque);
+          cPos.addScaledVector(nA.clone().add(nB), -0.5 * torque);
+        }
+      }
+    });
+
+    // 3. 1-4+ Non-bonded Steric Repulsion
+    for (let i = 0; i < nextAtoms.length; i++) {
+      for (let j = i + 1; j < nextAtoms.length; j++) {
+        const idA = nextAtoms[i].id;
+        const idB = nextAtoms[j].id;
+        if (exclusion12_13.has(`${idA}_${idB}`)) continue;
+
+        const pA = posMap.get(idA);
+        const pB = posMap.get(idB);
+        if (!pA || !pB) continue;
+
+        const delta = pB.clone().sub(pA);
+        const dist = delta.length();
+        if (dist > 0.01 && dist < 2.2) {
+          const push = 0.07 / (dist * dist);
+          const dir = delta.normalize().multiplyScalar(push);
+          pA.sub(dir);
+          pB.add(dir);
+        }
+      }
+    }
+  }
+
+  // Write finalized positions
+  nextAtoms.forEach((a) => {
+    const p = posMap.get(a.id);
+    if (p) {
+      a.position = [
+        Number(p.x.toFixed(4)),
+        Number(p.y.toFixed(4)),
+        Number(p.z.toFixed(4)),
+      ];
+    }
+  });
+
+  recenterMolecule(nextAtoms);
   return nextAtoms;
 }
 
@@ -787,6 +1090,35 @@ const PALETTE_ELEMENTS = [
   { symbol: 'Si', name: 'Silicon', maxBonds: 4, color: '#F0C8A0' },
 ];
 
+// Helper to guarantee every atom in the list has a distinct, collision-free ID
+export function ensureUniqueAtomIds(atomList: MolecularAtom[]): MolecularAtom[] {
+  const seen = new Set<string>();
+  let hasDupes = false;
+  for (const a of atomList) {
+    if (seen.has(a.id)) {
+      hasDupes = true;
+      break;
+    }
+    seen.add(a.id);
+  }
+  if (!hasDupes) return atomList;
+
+  const used = new Set<string>();
+  return atomList.map((a) => {
+    if (!used.has(a.id)) {
+      used.add(a.id);
+      return a;
+    }
+    let n = 1;
+    while (used.has(`${a.element}${n}`)) {
+      n++;
+    }
+    const newId = `${a.element}${n}`;
+    used.add(newId);
+    return { ...a, id: newId };
+  });
+}
+
 export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   theme = 'dark',
 }) => {
@@ -794,11 +1126,19 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Builder Atoms & Bonds state (Initial state: Water H₂O at exact 104.5° bent VSEPR angle)
-  const [atoms, setAtoms] = useState<MolecularAtom[]>([
+  const [atomsRaw, setAtomsRaw] = useState<MolecularAtom[]>([
     { id: 'O1', element: 'O', position: [0, 0, 0] },
     { id: 'H1', element: 'H', position: [-1.146, -0.888, 0] },
     { id: 'H2', element: 'H', position: [1.146, -0.888, 0] },
   ]);
+
+  const setAtoms = useCallback((action: React.SetStateAction<MolecularAtom[]>) => {
+    setAtomsRaw((prev) => {
+      const next = typeof action === 'function' ? action(prev) : action;
+      return ensureUniqueAtomIds(next);
+    });
+  }, []);
+  const atoms = atomsRaw;
 
   const [bonds, setBonds] = useState<MolecularBond[]>([
     { id: 'b1', from: 'O1', to: 'H1', order: 1 },
@@ -809,11 +1149,20 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   const [selectedAtomId, setSelectedAtomId] = useState<string | null>('O1');
   const [selectedBondOrder, setSelectedBondOrder] = useState<1 | 2 | 3>(1);
   const [isRelaxing, setIsRelaxing] = useState<boolean>(true);
+  const [relaxNonce, setRelaxNonce] = useState<number>(0);
+  const triggerRelax = useCallback(() => {
+    setRelaxNonce((n) => n + 1);
+  }, []);
   const [hoveredAtomId, setHoveredAtomId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('Click an atom to select, then click another atom to bond them together.');
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 640
   );
+  const [showIupacInfo, setShowIupacInfo] = useState<boolean>(false);
+  const [pubchemVerifiedIupac, setPubchemVerifiedIupac] = useState<string | null>(null);
+  const [autoFixBondAngles, setAutoFixBondAngles] = useState<boolean>(true);
+  const autoFixBondAnglesRef = useRef<boolean>(true);
+  autoFixBondAnglesRef.current = autoFixBondAngles;
 
   // Always keep fresh refs to eliminate any stale closures in Three.js event handlers!
   const atomsRef = useRef<MolecularAtom[]>(atoms);
@@ -835,6 +1184,8 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   const controlsRef = useRef<OrbitControls | null>(null);
   const molGroupRef = useRef<THREE.Group | null>(null);
   const atomMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const floorMeshRef = useRef<THREE.Mesh | null>(null);
+  const [sceneReady, setSceneReady] = useState<number>(0);
 
   // Count existing bond orders connected to an atom
   const getAtomBondsCount = useCallback((atomId: string, currentBonds: MolecularBond[], excludeBondId?: string) => {
@@ -891,12 +1242,23 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
 
         const next = [...currentBonds];
         next[existingIndex] = { ...existing, order: nextOrder as 1 | 2 | 3 };
+        if (autoFixBondAnglesRef.current) {
+          const fixed = fixAllBondAngles(atomsRef.current, next);
+          setAtoms(fixed);
+        }
         setBonds(next);
+        triggerRelax();
         soundFx.playBondSnap();
-        setStatusMessage(`Upgraded bond between ${atomAId} and ${atomBId} to ${nextOrder === 2 ? 'Double Bond (=)' : 'Triple Bond (≡)'}.`);
+        setStatusMessage(`Upgraded bond between ${atomAId} and ${atomBId} to ${nextOrder === 2 ? 'Double Bond (=)' : 'Triple Bond (≡)'}. Bond angles automatically fixed.`);
       } else {
         // Remove bond
-        setBonds(currentBonds.filter((_, i) => i !== existingIndex));
+        const nextBonds = currentBonds.filter((_, i) => i !== existingIndex);
+        if (autoFixBondAnglesRef.current && atomsRef.current.length > 1) {
+          const fixed = fixAllBondAngles(atomsRef.current, nextBonds);
+          setAtoms(fixed);
+        }
+        setBonds(nextBonds);
+        triggerRelax();
         soundFx.playReactionStep();
         setStatusMessage(`Disconnected bond between ${atomAId} and ${atomBId}.`);
       }
@@ -927,11 +1289,17 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
         to: atomBId,
         order: bondOrder,
       };
-      setBonds([...currentBonds, newBond]);
+      const nextBonds = [...currentBonds, newBond];
+      if (autoFixBondAnglesRef.current) {
+        const fixed = fixAllBondAngles(atomsRef.current, nextBonds);
+        setAtoms(fixed);
+      }
+      setBonds(nextBonds);
+      triggerRelax();
       soundFx.playBondSnap();
-      setStatusMessage(`Created bond between ${atomAId} and ${atomBId}!`);
+      setStatusMessage(`Created bond between ${atomAId} and ${atomBId}! Bond angles automatically fixed to VSEPR geometry.`);
     }
-  }, [getAtomBondsCount]);
+  }, [getAtomBondsCount, triggerRelax]);
 
   // Handle 3D atom click
   const handleAtomClick = useCallback((clickedId: string) => {
@@ -1004,6 +1372,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
     floorMesh.rotation.x = -Math.PI / 2;
     floorMesh.position.y = -3.5;
     scene.add(floorMesh);
+    floorMeshRef.current = floorMesh;
 
     // Raycast handling with drag prevention
     const raycaster = new THREE.Raycaster();
@@ -1071,6 +1440,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
     };
 
     animate();
+    setSceneReady((prev) => prev + 1);
 
     const handleResize = () => {
       if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
@@ -1091,167 +1461,215 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
       canvas.removeEventListener('mousemove', onPointerMove);
       disposeEnv();
       renderer.dispose();
+      floorMeshRef.current = null;
     };
-  }, [theme, handleAtomClick]);
+  }, [handleAtomClick]);
 
-  // VSEPR Force-Directed 3D Relaxation Loop
+  // Update scene background and floor color on theme change without tearing down the molecule
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(theme === 'dark' ? 0x050814 : 0xf8fafc);
+    }
+    if (floorMeshRef.current) {
+      const mat = floorMeshRef.current.material as THREE.MeshBasicMaterial;
+      mat.color.set(theme === 'dark' ? 0x000000 : 0x94a3b8);
+      mat.opacity = theme === 'dark' ? 0.35 : 0.12;
+    }
+  }, [theme]);
+
+  // VSEPR Force-Directed 3D Relaxation Loop with Convergence Detection
   useEffect(() => {
     if (!isRelaxing || atoms.length <= 1) return;
 
+    let isMounted = true;
     let timeoutId: NodeJS.Timeout;
+    let stepCount = 0;
+    const maxSteps = 120; // Bound relaxation per event
+
     const relaxStep = () => {
+      if (!isMounted) return;
+
+      let hasConverged = false;
+
       setAtoms((prevAtoms) => {
+        if (prevAtoms.length <= 1) {
+          hasConverged = true;
+          return prevAtoms;
+        }
+
         const next = prevAtoms.map((a) => ({
           ...a,
           position: [...a.position] as [number, number, number],
         }));
 
-        const targetBondLength = 1.45; // Equilibrium covalent bond distance in Ångströms
+        let maxDisp = 0;
 
-        // 1. Hooke's Law Spring Forces on bonds (lengths)
-        bondsRef.current.forEach((bond) => {
-          const a1 = next.find((a) => a.id === bond.from);
-          const a2 = next.find((a) => a.id === bond.to);
-          if (!a1 || !a2) return;
+        // Perform 2 mini-passes per frame for rapid, stable settling
+        for (let pass = 0; pass < 2; pass++) {
+          // 1. Hooke's Law Spring Forces on bonds (lengths)
+          bondsRef.current.forEach((bond) => {
+            const a1 = next.find((a) => a.id === bond.from);
+            const a2 = next.find((a) => a.id === bond.to);
+            if (!a1 || !a2) return;
 
-          const p1 = new THREE.Vector3(...a1.position);
-          const p2 = new THREE.Vector3(...a2.position);
-          const delta = p2.clone().sub(p1);
-          const currentDist = delta.length();
-          if (currentDist < 0.001) return;
-
-          const displacement = currentDist - targetBondLength;
-          const forceMag = displacement * 0.12;
-          const dir = delta.normalize();
-
-          a1.position[0] += dir.x * forceMag;
-          a1.position[1] += dir.y * forceMag;
-          a1.position[2] += dir.z * forceMag;
-
-          a2.position[0] -= dir.x * forceMag;
-          a2.position[1] -= dir.y * forceMag;
-          a2.position[2] -= dir.z * forceMag;
-        });
-
-        // 2. Harmonic VSEPR Angle Restoring Forces (Fixing bond angles)
-        const connectedCenters = next.filter((atom) => {
-          const cnt = bondsRef.current.filter((b) => b.from === atom.id || b.to === atom.id).length;
-          return cnt >= 2;
-        });
-
-        connectedCenters.forEach((centerAtom) => {
-          const connectedBonds = bondsRef.current.filter((b) => b.from === centerAtom.id || b.to === centerAtom.id);
-          const neighborIds = connectedBonds.map((b) => (b.from === centerAtom.id ? b.to : b.from));
-          const neighbors = neighborIds
-            .map((id) => next.find((a) => a.id === id))
-            .filter((a): a is MolecularAtom => !!a);
-
-          if (neighbors.length < 2) return;
-
-          const vsepr = getAtomVSEPRGeometry(centerAtom, next, bondsRef.current);
-          const centerPos = new THREE.Vector3(...centerAtom.position);
-
-          for (let i = 0; i < neighbors.length; i++) {
-            for (let j = i + 1; j < neighbors.length; j++) {
-              const a1 = neighbors[i];
-              const a2 = neighbors[j];
-
-              const v1 = new THREE.Vector3(...a1.position).sub(centerPos);
-              const v2 = new THREE.Vector3(...a2.position).sub(centerPos);
-
-              const d1 = v1.length();
-              const d2 = v2.length();
-              if (d1 < 0.1 || d2 < 0.1) continue;
-
-              const u1 = v1.clone().multiplyScalar(1 / d1);
-              const u2 = v2.clone().multiplyScalar(1 / d2);
-
-              const dot = Math.max(-0.9999, Math.min(0.9999, u1.dot(u2)));
-              const currentAngle = Math.acos(dot);
-
-              let targetAngle = (vsepr.idealAngleDeg * Math.PI) / 180;
-              if (vsepr.name.startsWith('Octahedral') || vsepr.name.startsWith('Square Planar')) {
-                targetAngle = currentAngle > (135 * Math.PI) / 180 ? Math.PI : Math.PI / 2;
-              }
-
-              const angleError = currentAngle - targetAngle;
-              if (Math.abs(angleError) < 0.001) continue;
-
-              // Orthogonal in-plane vectors pointing toward each other
-              const sinVal = Math.sqrt(Math.max(1e-6, 1 - dot * dot));
-              const n1 = u2.clone().addScaledVector(u1, -dot).multiplyScalar(1 / sinVal);
-              const n2 = u1.clone().addScaledVector(u2, -dot).multiplyScalar(1 / sinVal);
-
-              const kAngle = 0.085;
-              const shiftMag = kAngle * angleError;
-
-              // Rotate bonds toward ideal VSEPR angle
-              a1.position[0] += n1.x * shiftMag;
-              a1.position[1] += n1.y * shiftMag;
-              a1.position[2] += n1.z * shiftMag;
-
-              a2.position[0] += n2.x * shiftMag;
-              a2.position[1] += n2.y * shiftMag;
-              a2.position[2] += n2.z * shiftMag;
-
-              centerAtom.position[0] -= (n1.x + n2.x) * shiftMag * 0.5;
-              centerAtom.position[1] -= (n1.y + n2.y) * shiftMag * 0.5;
-              centerAtom.position[2] -= (n1.z + n2.z) * shiftMag * 0.5;
-            }
-          }
-        });
-
-        // 3. Van der Waals Repulsion with 1-3 exclusion (so non-bonded repulsion does not distort bond angles)
-        const bondedOr13Pair = new Set<string>();
-        bondsRef.current.forEach((b) => {
-          bondedOr13Pair.add(`${b.from}_${b.to}`);
-          bondedOr13Pair.add(`${b.to}_${b.from}`);
-        });
-        connectedCenters.forEach((center) => {
-          const cBonds = bondsRef.current.filter((b) => b.from === center.id || b.to === center.id);
-          const nIds = cBonds.map((b) => (b.from === center.id ? b.to : b.from));
-          for (let m = 0; m < nIds.length; m++) {
-            for (let n = m + 1; n < nIds.length; n++) {
-              bondedOr13Pair.add(`${nIds[m]}_${nIds[n]}`);
-              bondedOr13Pair.add(`${nIds[n]}_${nIds[m]}`);
-            }
-          }
-        });
-
-        for (let i = 0; i < next.length; i++) {
-          for (let j = i + 1; j < next.length; j++) {
-            const a1 = next[i];
-            const a2 = next[j];
-            if (bondedOr13Pair.has(`${a1.id}_${a2.id}`)) continue; // 1-2 and 1-3 exclusion!
-
+            const targetBondLength = getTargetBondLength(a1.element, a2.element, bond.order);
             const p1 = new THREE.Vector3(...a1.position);
             const p2 = new THREE.Vector3(...a2.position);
             const delta = p2.clone().sub(p1);
-            const dist = delta.length();
-            if (dist < 0.1 || dist > 3.0) continue;
+            const currentDist = delta.length();
+            if (currentDist < 0.001) return;
 
-            const repulseMag = 0.08 / (dist * dist);
+            const displacement = currentDist - targetBondLength;
+            const forceMag = displacement * 0.15;
             const dir = delta.normalize();
 
-            a1.position[0] -= dir.x * repulseMag;
-            a1.position[1] -= dir.y * repulseMag;
-            a1.position[2] -= dir.z * repulseMag;
+            a1.position[0] += dir.x * forceMag;
+            a1.position[1] += dir.y * forceMag;
+            a1.position[2] += dir.z * forceMag;
 
-            a2.position[0] += dir.x * repulseMag;
-            a2.position[1] += dir.y * repulseMag;
-            a2.position[2] += dir.z * repulseMag;
+            a2.position[0] -= dir.x * forceMag;
+            a2.position[1] -= dir.y * forceMag;
+            a2.position[2] -= dir.z * forceMag;
+          });
+
+          // 2. Harmonic VSEPR Angle Restoring Forces (Fixing bond angles)
+          const connectedCenters = next.filter((atom) => {
+            return bondsRef.current.filter((b) => b.from === atom.id || b.to === atom.id).length >= 2;
+          });
+
+          connectedCenters.forEach((centerAtom) => {
+            const connectedBonds = bondsRef.current.filter((b) => b.from === centerAtom.id || b.to === centerAtom.id);
+            const neighborIds = connectedBonds.map((b) => (b.from === centerAtom.id ? b.to : b.from));
+            const neighbors = neighborIds
+              .map((id) => next.find((a) => a.id === id))
+              .filter((a): a is MolecularAtom => !!a);
+
+            if (neighbors.length < 2) return;
+
+            const vsepr = getAtomVSEPRGeometry(centerAtom, next, bondsRef.current);
+            const centerPos = new THREE.Vector3(...centerAtom.position);
+
+            for (let i = 0; i < neighbors.length; i++) {
+              for (let j = i + 1; j < neighbors.length; j++) {
+                const a1 = neighbors[i];
+                const a2 = neighbors[j];
+
+                const v1 = new THREE.Vector3(...a1.position).sub(centerPos);
+                const v2 = new THREE.Vector3(...a2.position).sub(centerPos);
+
+                const d1 = v1.length();
+                const d2 = v2.length();
+                if (d1 < 0.1 || d2 < 0.1) continue;
+
+                const u1 = v1.multiplyScalar(1 / d1);
+                const u2 = v2.multiplyScalar(1 / d2);
+
+                const dot = Math.max(-0.9999, Math.min(0.9999, u1.dot(u2)));
+                const currentAngle = Math.acos(dot);
+
+                let targetAngle = (vsepr.idealAngleDeg * Math.PI) / 180;
+                if (vsepr.name.startsWith('Octahedral') || vsepr.name.startsWith('Square Planar')) {
+                  targetAngle = currentAngle > (135 * Math.PI) / 180 ? Math.PI : Math.PI / 2;
+                }
+
+                const angleError = currentAngle - targetAngle;
+                if (Math.abs(angleError) < 0.002) continue;
+
+                const sinVal = Math.sqrt(Math.max(1e-6, 1 - dot * dot));
+                const n1 = u2.clone().addScaledVector(u1, -dot).multiplyScalar(1 / sinVal);
+                const n2 = u1.clone().addScaledVector(u2, -dot).multiplyScalar(1 / sinVal);
+
+                const kAngle = 0.12;
+                const shiftMag = kAngle * angleError;
+
+                a1.position[0] += n1.x * shiftMag;
+                a1.position[1] += n1.y * shiftMag;
+                a1.position[2] += n1.z * shiftMag;
+
+                a2.position[0] += n2.x * shiftMag;
+                a2.position[1] += n2.y * shiftMag;
+                a2.position[2] += n2.z * shiftMag;
+
+                centerAtom.position[0] -= (n1.x + n2.x) * shiftMag * 0.5;
+                centerAtom.position[1] -= (n1.y + n2.y) * shiftMag * 0.5;
+                centerAtom.position[2] -= (n1.z + n2.z) * shiftMag * 0.5;
+              }
+            }
+          });
+
+          // 3. Van der Waals Repulsion with 1-3 exclusion
+          const bondedOr13Pair = new Set<string>();
+          bondsRef.current.forEach((b) => {
+            bondedOr13Pair.add(`${b.from}_${b.to}`);
+            bondedOr13Pair.add(`${b.to}_${b.from}`);
+          });
+          connectedCenters.forEach((center) => {
+            const cBonds = bondsRef.current.filter((b) => b.from === center.id || b.to === center.id);
+            const nIds = cBonds.map((b) => (b.from === center.id ? b.to : b.from));
+            for (let m = 0; m < nIds.length; m++) {
+              for (let n = m + 1; n < nIds.length; n++) {
+                bondedOr13Pair.add(`${nIds[m]}_${nIds[n]}`);
+                bondedOr13Pair.add(`${nIds[n]}_${nIds[m]}`);
+              }
+            }
+          });
+
+          for (let i = 0; i < next.length; i++) {
+            for (let j = i + 1; j < next.length; j++) {
+              const a1 = next[i];
+              const a2 = next[j];
+              if (bondedOr13Pair.has(`${a1.id}_${a2.id}`)) continue;
+
+              const p1 = new THREE.Vector3(...a1.position);
+              const p2 = new THREE.Vector3(...a2.position);
+              const delta = p2.clone().sub(p1);
+              const dist = delta.length();
+              if (dist < 0.1 || dist > 2.8) continue;
+
+              const repulseMag = 0.06 / (dist * dist);
+              const dir = delta.normalize();
+
+              a1.position[0] -= dir.x * repulseMag;
+              a1.position[1] -= dir.y * repulseMag;
+              a1.position[2] -= dir.z * repulseMag;
+
+              a2.position[0] += dir.x * repulseMag;
+              a2.position[1] += dir.y * repulseMag;
+              a2.position[2] += dir.z * repulseMag;
+            }
           }
         }
 
+        // Measure maximum displacement across all atoms
+        for (let i = 0; i < next.length; i++) {
+          const d = Math.hypot(
+            next[i].position[0] - prevAtoms[i].position[0],
+            next[i].position[1] - prevAtoms[i].position[1],
+            next[i].position[2] - prevAtoms[i].position[2]
+          );
+          if (d > maxDisp) maxDisp = d;
+        }
+
+        if (maxDisp < 0.002 || stepCount >= maxSteps) {
+          hasConverged = true;
+          return prevAtoms; // Same reference -> React skips re-render!
+        }
+
+        stepCount++;
         return next;
       });
 
-      timeoutId = setTimeout(relaxStep, 50);
+      if (!hasConverged && stepCount < maxSteps && isMounted) {
+        timeoutId = setTimeout(relaxStep, 35);
+      }
     };
 
     relaxStep();
-    return () => clearTimeout(timeoutId);
-  }, [isRelaxing, atoms.length]);
+    return () => {
+      isMounted = false;
+      clearTimeout(timeoutId);
+    };
+  }, [isRelaxing, atoms.length, bonds.length, relaxNonce]);
 
   // Rebuild 3D Mesh
   useEffect(() => {
@@ -1387,7 +1805,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
     });
 
     // Render 3D Bond Angle Arcs & Measurements for Inspected Atom
-    const targetInspectAtomId = selectedAtomId || hoveredAtomId;
+    const targetInspectAtomId = selectedAtomId;
     if (targetInspectAtomId) {
       const inspectAtom = atoms.find((a) => a.id === targetInspectAtomId);
       if (inspectAtom) {
@@ -1424,13 +1842,39 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
         });
       }
     }
-  }, [atoms, bonds, selectedAtomId, hoveredAtomId]);
+  }, [atoms, bonds, selectedAtomId, sceneReady]);
+
+  // Fast hover highlight without rebuilding scene geometry or canvas textures
+  const prevHoveredAtomRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prevId = prevHoveredAtomRef.current;
+    if (prevId && prevId !== selectedAtomId) {
+      const mesh = atomMeshMapRef.current.get(prevId);
+      if (mesh && (mesh as any).material && ((mesh as any).material as THREE.MeshPhysicalMaterial).emissive) {
+        ((mesh as any).material as THREE.MeshPhysicalMaterial).emissive.setHex(0x000000);
+        ((mesh as any).material as THREE.MeshPhysicalMaterial).emissiveIntensity = 0;
+      }
+    }
+    if (hoveredAtomId && hoveredAtomId !== selectedAtomId) {
+      const mesh = atomMeshMapRef.current.get(hoveredAtomId);
+      if (mesh && (mesh as any).material && ((mesh as any).material as THREE.MeshPhysicalMaterial).emissive) {
+        ((mesh as any).material as THREE.MeshPhysicalMaterial).emissive.setHex(0xf59e0b);
+        ((mesh as any).material as THREE.MeshPhysicalMaterial).emissiveIntensity = 0.5;
+      }
+    }
+    prevHoveredAtomRef.current = hoveredAtomId;
+  }, [hoveredAtomId, selectedAtomId]);
 
   // Add new atom
   const handleAddAtom = (elSymbol: string) => {
     soundFx.playReactionStep();
-    const countSame = atoms.filter((a) => a.element === elSymbol).length + 1;
-    const id = `${elSymbol}${countSame}`;
+    // Guarantee strictly unique ID across all current atoms
+    const existingIds = new Set(atoms.map((a) => a.id));
+    let nextNum = 1;
+    while (existingIds.has(`${elSymbol}${nextNum}`)) {
+      nextNum++;
+    }
+    const id = `${elSymbol}${nextNum}`;
 
     // Position according to exact VSEPR coordination geometry of selected atom, or near origin
     let newPos: [number, number, number];
@@ -1443,7 +1887,6 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
 
     const newAtom: MolecularAtom = { id, element: elSymbol, position: newPos };
     const nextAtoms = [...atoms, newAtom];
-    setAtoms(nextAtoms);
 
     // If an atom was already selected, check valence limits before auto-bonding
     if (selected) {
@@ -1452,27 +1895,41 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
       const currentSelectedBonds = getAtomBondsCount(selected.id, bonds);
 
       if (currentSelectedBonds + selectedBondOrder > specSelected.maxBonds) {
+        setAtoms(nextAtoms);
+        triggerRelax();
         soundFx.playQuizChime(false);
         setStatusMessage(
           `Added ${elSymbol} (${id}). Could not auto-bond: ${formatAtomWithCharge(selected.element, selected.formalCharge || 0)} (${selected.id}) is at max bonding capacity (${currentSelectedBonds}/${specSelected.maxBonds} bonds with ${specSelected.valenceElectrons} outermost e⁻). Select ${selected.id} and click "Lose e⁻" to expand bonding!`
         );
       } else if (selectedBondOrder > specNew.maxBonds) {
+        setAtoms(nextAtoms);
+        triggerRelax();
         soundFx.playQuizChime(false);
         setStatusMessage(
           `Added ${elSymbol} (${id}). Could not auto-bond with order ${selectedBondOrder}: ${elSymbol} can only form max ${specNew.maxBonds} bond(s).`
         );
       } else {
         const newBond: MolecularBond = {
-          id: `b_${Date.now()}`,
+          id: `b_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           from: selected.id,
           to: id,
           order: selectedBondOrder,
         };
-        setBonds([...bonds, newBond]);
-        setStatusMessage(`Added ${elSymbol} (${id}) and bonded to ${formatAtomWithCharge(selected.element, selected.formalCharge || 0)} (${selected.id})!`);
+        const nextBonds = [...bonds, newBond];
+        if (autoFixBondAnglesRef.current) {
+          const fixedAtoms = fixAllBondAngles(nextAtoms, nextBonds);
+          setAtoms(fixedAtoms);
+        } else {
+          setAtoms(nextAtoms);
+        }
+        setBonds(nextBonds);
+        triggerRelax();
+        setStatusMessage(`Added ${elSymbol} (${id}), bonded to ${selected.id}, and automatically fixed bond angle to ideal VSEPR geometry!`);
         soundFx.playBondSnap();
       }
     } else {
+      setAtoms(nextAtoms);
+      triggerRelax();
       setStatusMessage(`Added ${elSymbol} (${id}). Click it to select.`);
     }
 
@@ -1482,9 +1939,17 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   // Delete selected atom
   const handleDeleteAtom = () => {
     if (!selectedAtomId) return;
-    setAtoms(atoms.filter((a) => a.id !== selectedAtomId));
-    setBonds(bonds.filter((b) => b.from !== selectedAtomId && b.to !== selectedAtomId));
+    const remainingAtoms = atoms.filter((a) => a.id !== selectedAtomId);
+    const remainingBonds = bonds.filter((b) => b.from !== selectedAtomId && b.to !== selectedAtomId);
+    if (autoFixBondAnglesRef.current && remainingAtoms.length > 1) {
+      const fixed = fixAllBondAngles(remainingAtoms, remainingBonds);
+      setAtoms(fixed);
+    } else {
+      setAtoms(remainingAtoms);
+    }
+    setBonds(remainingBonds);
     setSelectedAtomId(null);
+    triggerRelax();
     soundFx.playReactionStep();
     setStatusMessage('Deleted selected atom and its connected bonds.');
   };
@@ -1529,8 +1994,13 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
       }
     }
 
+    if (autoFixBondAnglesRef.current && atoms.length > 1) {
+      const fixed = fixAllBondAngles(atoms, newBonds);
+      setAtoms(fixed);
+    }
     setBonds(newBonds);
-    setStatusMessage(`Auto-connected ${createdCount} bonds based on spatial proximity.`);
+    triggerRelax();
+    setStatusMessage(`Auto-connected ${createdCount} bonds based on spatial proximity. Bond angles automatically adjusted.`);
   };
 
   // Add hydrogens to satisfy standard octets
@@ -1539,7 +2009,8 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
     const maxValence: Record<string, number> = { C: 4, N: 3, O: 2, P: 5, S: 6, Cl: 1, F: 1 };
     let newAtoms = [...atoms];
     let newBonds = [...bonds];
-    let hCounter = newAtoms.filter((a) => a.element === 'H').length;
+    const existingIds = new Set(newAtoms.map((a) => a.id));
+    let hNum = 1;
 
     atoms.forEach((atom) => {
       const allowed = maxValence[atom.element];
@@ -1551,92 +2022,80 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
 
       const neededH = allowed - currentBonds;
       for (let k = 0; k < neededH; k++) {
-        hCounter++;
-        const hid = `H${hCounter}`;
+        while (existingIds.has(`H${hNum}`)) {
+          hNum++;
+        }
+        const hid = `H${hNum}`;
+        existingIds.add(hid);
         const hPos = getNextVSEPRBondPosition(atom, newAtoms, newBonds, 1.15);
 
         newAtoms.push({ id: hid, element: 'H', position: hPos });
-        newBonds.push({ id: `b_${hid}_${atom.id}`, from: atom.id, to: hid, order: 1 });
+        newBonds.push({
+          id: `b_${hid}_${atom.id}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          from: atom.id,
+          to: hid,
+          order: 1,
+        });
       }
     });
 
     const finalizedAtoms = fixAllBondAngles(newAtoms, newBonds);
     setAtoms(finalizedAtoms);
     setBonds(newBonds);
+    triggerRelax();
     setStatusMessage('Added Hydrogen atoms and fixed all bond angles to ideal VSEPR geometry.');
   };
 
   // Explicitly fix all bond angles in the molecule to VSEPR geometry
   const handleFixBondAngles = () => {
     soundFx.playBondSnap();
-    setAtoms((prev) => {
-      const fixed = fixAllBondAngles(prev, bonds);
-      return fixed;
-    });
+    setAtoms((prev) => fixAllBondAngles(prev, bonds));
+    triggerRelax();
     setStatusMessage('Fixed all bond angles to exact VSEPR chemical geometries (104.5° bent, 107° pyramidal, 109.5° tetrahedral, 120° planar, 180° linear).');
   };
 
-  // Identify synthesized chemical formula with net charge
-  const synthesizedFormula = useMemo(() => {
-    if (atoms.length === 0) return 'Empty Workspace';
-    const counts: Record<string, number> = {};
-    let netCharge = 0;
+  // Determine comprehensive molecule identity, formula, and official IUPAC nomenclature
+  const moleculeIdentity = useMemo(() => {
+    return determineMoleculeIdentity(atoms, bonds);
+  }, [atoms, bonds]);
 
-    atoms.forEach((a) => {
-      counts[a.element] = (counts[a.element] || 0) + 1;
-      netCharge += a.formalCharge || 0;
-    });
-
-    let res = '';
-    if (counts['C']) {
-      res += `C${counts['C'] > 1 ? counts['C'] : ''}`;
-      delete counts['C'];
-      if (counts['H']) {
-        res += `H${counts['H'] > 1 ? counts['H'] : ''}`;
-        delete counts['H'];
+  // Real-time asynchronous PubChem IUPAC confirmation (non-blocking)
+  useEffect(() => {
+    if (atoms.length === 0 || !moleculeIdentity.hillFormula || moleculeIdentity.hillFormula === 'Empty') {
+      setPubchemVerifiedIupac(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(async () => {
+      try {
+        const cleanFormula = moleculeIdentity.hillFormula.replace(/[^A-Za-z0-9]/g, '');
+        if (!cleanFormula) return;
+        const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/fastformula/${encodeURIComponent(
+          cleanFormula
+        )}/property/IUPACName,Title/JSON`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          const props = data?.PropertyTable?.Properties;
+          if (Array.isArray(props) && props.length > 0) {
+            const verified = props[0]?.IUPACName || props[0]?.Title;
+            if (verified && typeof verified === 'string') {
+              setPubchemVerifiedIupac(verified);
+            }
+          }
+        }
+      } catch {
+        // PubChem lookup is optional enhancement
       }
-    }
-    Object.keys(counts)
-      .sort()
-      .forEach((el) => {
-        res += `${el}${counts[el] > 1 ? counts[el] : ''}`;
-      });
+    }, 700);
 
-    let chargeSign = '';
-    if (netCharge > 0) {
-      chargeSign = netCharge === 1 ? '⁺' : `${netCharge}⁺`;
-    } else if (netCharge < 0) {
-      chargeSign = netCharge === -1 ? '⁻' : `${Math.abs(netCharge)}⁻`;
-    }
-
-    const formulaWithCharge = chargeSign ? `${res}${chargeSign}` : res;
-
-    const knownMap: Record<string, string> = {
-      H2O: 'Water (H₂O)',
-      'H3O+': 'Hydronium Ion (H₃O⁺)',
-      'OH-': 'Hydroxide Ion (OH⁻)',
-      'NH4+': 'Ammonium Ion (NH₄⁺)',
-      NH3: 'Ammonia (NH₃)',
-      'NH2-': 'Amide Ion (NH₂⁻)',
-      CH4: 'Methane (CH₄)',
-      'CH3+': 'Methyl Carbocation (CH₃⁺)',
-      'CH3-': 'Methyl Carbanion (CH₃⁻)',
-      CO2: 'Carbon Dioxide (CO₂)',
-      C2H6O: 'Ethanol / Dimethyl Ether',
-      C6H6: 'Benzene (C₆H₆)',
-      NaCl: 'Sodium Chloride (Salt)',
-      O2: 'Oxygen Gas (O₂)',
-      H2: 'Hydrogen Gas (H₂)',
-      HCl: 'Hydrochloric Acid',
-      HF: 'Hydrofluoric Acid',
-      'BF4-': 'Tetrafluoroborate Ion (BF₄⁻)',
-      'BH4-': 'Borohydride Ion (BH₄⁻)',
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
     };
+  }, [moleculeIdentity.hillFormula, atoms.length]);
 
-    const key = `${res}${netCharge > 0 ? (netCharge === 1 ? '+' : `${netCharge}+`) : netCharge < 0 ? (netCharge === -1 ? '-' : `${Math.abs(netCharge)}-`) : ''}`;
-    const match = knownMap[key] || knownMap[res];
-    return match ? `${match}` : `Molecule • ${formulaWithCharge}`;
-  }, [atoms]);
+  const synthesizedFormula = moleculeIdentity.formula;
 
   // Selected atom object
   const activeSelectedAtom = useMemo(() => {
@@ -1655,7 +2114,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
     return getAtomVSEPRGeometry(activeSelectedAtom, atoms, bonds);
   }, [activeSelectedAtom, atoms, bonds]);
 
-  // Measured bond angles around selected atom
+// Measured bond angles around selected atom
   const measuredAnglesForSelected = useMemo(() => {
     if (!activeSelectedAtom) return [];
     return computeBondAnglesForAtom(activeSelectedAtom, atoms, bonds);
@@ -1675,8 +2134,8 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
   // Electron gain/loss handlers
   const handleGainElectron = () => {
     if (!selectedAtomId) return;
-    setAtoms((prev) =>
-      prev.map((a) => {
+    setAtoms((prev) => {
+      const updated = prev.map((a) => {
         if (a.id !== selectedAtomId) return a;
         const currentCharge = a.formalCharge || 0;
         const newCharge = currentCharge - 1; // Gained 1 e⁻ => charge becomes more negative
@@ -1686,14 +2145,16 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
         );
         soundFx.playReactionStep();
         return { ...a, formalCharge: newCharge };
-      })
-    );
+      });
+      return autoFixBondAnglesRef.current && updated.length > 1 ? fixAllBondAngles(updated, bonds) : updated;
+    });
+    triggerRelax();
   };
 
   const handleLoseElectron = () => {
     if (!selectedAtomId) return;
-    setAtoms((prev) =>
-      prev.map((a) => {
+    setAtoms((prev) => {
+      const updated = prev.map((a) => {
         if (a.id !== selectedAtomId) return a;
         const currentCharge = a.formalCharge || 0;
         const newCharge = currentCharge + 1; // Lost 1 e⁻ => charge becomes more positive
@@ -1703,21 +2164,25 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
         );
         soundFx.playReactionStep();
         return { ...a, formalCharge: newCharge };
-      })
-    );
+      });
+      return autoFixBondAnglesRef.current && updated.length > 1 ? fixAllBondAngles(updated, bonds) : updated;
+    });
+    triggerRelax();
   };
 
   const handleResetElectron = () => {
     if (!selectedAtomId) return;
-    setAtoms((prev) =>
-      prev.map((a) => {
+    setAtoms((prev) => {
+      const updated = prev.map((a) => {
         if (a.id !== selectedAtomId) return a;
         const spec = getMaxBondsForAtom(a.element, 0);
         setStatusMessage(`Reset ${a.element} (${a.id}) to neutral atom (${spec.valenceElectrons} outermost e⁻, max ${spec.maxBonds} bonds).`);
         soundFx.playReactionStep();
         return { ...a, formalCharge: 0 };
-      })
-    );
+      });
+      return autoFixBondAnglesRef.current && updated.length > 1 ? fixAllBondAngles(updated, bonds) : updated;
+    });
+    triggerRelax();
   };
 
   // Atoms that can be connected to the currently selected atom
@@ -1732,16 +2197,125 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
       <div ref={containerRef} className="relative flex-1 w-full h-full">
         <canvas ref={canvasRef} className="w-full h-full block outline-none" />
 
-        {/* Top-Left Molecule Formula & Status Badge */}
-        <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 max-w-sm pointer-events-auto">
-          <div className="backdrop-blur-md bg-slate-900/85 border border-slate-800 rounded-xl p-3 shadow-xl">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-sky-400" />
-              <h2 className="text-sm font-bold text-white font-mono">{synthesizedFormula}</h2>
+        {/* Top-Left Molecule Formula & Status Badge with Official IUPAC Name */}
+        <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 max-w-sm sm:max-w-md pointer-events-auto">
+          <div className="backdrop-blur-md bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 shadow-2xl flex flex-col gap-2.5">
+            {/* Header: Full Official IUPAC Name (PIN) & Formula */}
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm sm:text-base font-black text-cyan-200 font-mono tracking-tight select-all">
+                      {moleculeIdentity.iupacName}
+                    </h2>
+                    {moleculeIdentity.formula !== 'Empty' && (
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-sky-950/80 text-sky-300 font-bold border border-sky-500/40 shadow-sm">
+                        {moleculeIdentity.formula}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-400 font-mono mt-0.5">
+                    {moleculeIdentity.commonName && moleculeIdentity.commonName.toLowerCase() !== moleculeIdentity.iupacName.toLowerCase() && (
+                      <span className="text-slate-300">
+                        Common: <span className="text-amber-300 font-semibold">{moleculeIdentity.commonName}</span> •
+                      </span>
+                    )}
+                    <span>
+                      {atoms.length} atoms • {bonds.length} bonds • {moleculeIdentity.molarMass > 0 ? `${moleculeIdentity.molarMass} g/mol` : '0 g/mol'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {atoms.length > 0 && (
+                <button
+                  onClick={() => {
+                    setShowIupacInfo(!showIupacInfo);
+                    soundFx.playReactionStep();
+                  }}
+                  className={`p-1.5 rounded-lg border text-[11px] flex items-center gap-1 transition-all ${
+                    showIupacInfo
+                      ? 'bg-sky-500 text-white border-sky-400 shadow-sm'
+                      : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                  }`}
+                  title="Toggle detailed IUPAC nomenclature rules & derivation"
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-semibold hidden sm:inline">Rules</span>
+                </button>
+              )}
             </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              {atoms.length} atoms • {bonds.length} bonds connected
-            </p>
+
+            {/* Prominent Full Official IUPAC Name (PIN) Showcase Badge */}
+            <div className="p-3 rounded-xl bg-gradient-to-r from-sky-950/80 via-slate-900/90 to-indigo-950/80 border border-sky-500/50 shadow-lg shadow-sky-950/40 flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2 border-b border-sky-800/30 pb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                  </span>
+                  <span className="text-[10px] uppercase font-mono font-extrabold tracking-wider text-cyan-300">
+                    Full IUPAC Name (PIN)
+                  </span>
+                </div>
+                <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-sky-900/70 border border-sky-600/40 text-sky-200 font-mono font-medium truncate max-w-[170px]">
+                  {moleculeIdentity.classification}
+                </span>
+              </div>
+
+              {/* Main Full IUPAC Name Typography */}
+              <div className="flex items-baseline gap-1.5 pt-0.5">
+                <span className="text-base sm:text-lg font-black font-mono text-cyan-200 tracking-tight break-words select-all">
+                  {moleculeIdentity.iupacName}
+                </span>
+              </div>
+
+              {/* Systematic / Additive IUPAC Name if distinct from PIN */}
+              {moleculeIdentity.systematicIupacName &&
+                moleculeIdentity.systematicIupacName.toLowerCase() !== moleculeIdentity.iupacName.toLowerCase() && (
+                  <div className="pt-1.5 border-t border-slate-800/80 flex flex-col gap-0.5 text-[10.5px]">
+                    <span className="text-[9px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                      Systematic / Additive IUPAC:
+                    </span>
+                    <span className="font-mono text-cyan-200 font-semibold select-all break-words">
+                      {moleculeIdentity.systematicIupacName}
+                    </span>
+                  </div>
+                )}
+
+              {/* Verified Online IUPAC Tag if PubChem API confirms */}
+              {pubchemVerifiedIupac && (
+                <div className="flex items-center gap-1.5 text-[9.5px] font-mono text-emerald-300 bg-emerald-950/50 border border-emerald-500/40 rounded-lg px-2 py-1 mt-1">
+                  <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
+                  <span className="truncate">PubChem Verified: {pubchemVerifiedIupac}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Collapsible IUPAC Rules & Nomenclature Details */}
+            {showIupacInfo && (
+              <div className="p-2.5 rounded-xl bg-slate-950/95 border border-sky-500/30 text-[11px] text-slate-300 space-y-1.5 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between text-sky-300 font-semibold text-[11px]">
+                  <span className="flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5 text-sky-400" />
+                    IUPAC Nomenclature Derivation
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-400">
+                    Net Charge: {moleculeIdentity.netCharge > 0 ? `+${moleculeIdentity.netCharge}` : moleculeIdentity.netCharge}
+                  </span>
+                </div>
+                <p className="text-[10.5px] text-slate-300 leading-relaxed font-sans">
+                  {moleculeIdentity.iupacRulesNote}
+                </p>
+                <div className="pt-1 border-t border-slate-800 text-[9.5px] text-slate-400 flex items-center justify-between font-mono">
+                  <span>Hill Notation: {moleculeIdentity.hillFormula || 'N/A'}</span>
+                  <span>Molar Mass: {moleculeIdentity.molarMass} g/mol</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Helper Banner */}
@@ -1946,7 +2520,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                   <p className="text-[11px] text-slate-500 italic">No other atoms in workspace. Add more atoms below.</p>
                 ) : (
                   <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-1">
-                    {availableTargetAtoms.map((target) => {
+                    {availableTargetAtoms.map((target, idx) => {
                       const isBonded = bonds.some(
                         (b) =>
                           (b.from === activeSelectedAtom.id && b.to === target.id) ||
@@ -1962,7 +2536,7 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
 
                       return (
                         <button
-                          key={target.id}
+                          key={`${target.id}-${idx}`}
                           onClick={() => connectOrToggleBond(activeSelectedAtom.id, target.id, selectedBondOrder)}
                           className={`px-2 py-1 rounded-lg text-xs font-mono font-medium flex items-center gap-1 transition-all ${
                             isBonded
@@ -1990,11 +2564,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                 <div className="mt-2.5 pt-2 border-t border-slate-800">
                   <span className="text-[10px] text-slate-400 block mb-1">Connected Bonds:</span>
                   <div className="flex flex-wrap gap-1">
-                    {selectedAtomBonds.map((b) => {
+                    {selectedAtomBonds.map((b, idx) => {
                       const otherId = b.from === activeSelectedAtom.id ? b.to : b.from;
                       return (
                         <button
-                          key={b.id}
+                          key={`${b.id}-${idx}`}
                           onClick={() => setBonds(bonds.filter((x) => x.id !== b.id))}
                           className="px-1.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-[10px] font-mono flex items-center gap-1"
                           title="Click to remove bond"
@@ -2014,9 +2588,23 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
         {/* Floating Controls on Canvas (Right-Side) */}
         <div className="absolute right-2 sm:right-4 bottom-14 sm:bottom-24 z-10 flex flex-col gap-1.5 pointer-events-auto">
           <button
-            onClick={handleFixBondAngles}
-            className="p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-emerald-400 border border-slate-800 shadow-lg transition-all hover:scale-105"
-            title="Fix Bond Angles (VSEPR Geometry: 104.5° bent, 107° pyramidal, 109.5° tetrahedral, 120° planar, 180° linear)"
+            onClick={() => {
+              const nextVal = !autoFixBondAngles;
+              setAutoFixBondAngles(nextVal);
+              if (nextVal) {
+                setAtoms((prev) => fixAllBondAngles(prev, bonds));
+                triggerRelax();
+                setStatusMessage('Auto-Fix Bond Angles enabled: VSEPR geometry is automatically maintained on every edit.');
+              } else {
+                setStatusMessage('Auto-Fix Bond Angles paused. You can still snap bond angles manually.');
+              }
+            }}
+            className={`p-2.5 rounded-xl border shadow-lg transition-all ${
+              autoFixBondAngles
+                ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500/60 ring-1 ring-emerald-500/40 hover:bg-emerald-600/40'
+                : 'bg-slate-900/90 hover:bg-slate-800 text-slate-400 border-slate-800'
+            }`}
+            title={`Auto-Fix Bond Angles (${autoFixBondAngles ? 'Active: ON' : 'Paused: OFF'}): Automatically calculates and enforces exact VSEPR angles on every bond/atom`}
           >
             <Compass className="w-4 h-4" />
           </button>
@@ -2120,12 +2708,34 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
             {/* Smart Chemistry Assistants */}
             <div className="flex items-center gap-1.5">
               <button
+                onClick={() => {
+                  const nextVal = !autoFixBondAngles;
+                  setAutoFixBondAngles(nextVal);
+                  if (nextVal) {
+                    setAtoms((prev) => fixAllBondAngles(prev, bonds));
+                    triggerRelax();
+                    setStatusMessage('Auto-Fix Bond Angles enabled: VSEPR geometry is automatically enforced upon any structure change.');
+                  } else {
+                    setStatusMessage('Auto-Fix Bond Angles paused. You can still snap bond angles manually.');
+                  }
+                }}
+                className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-all ${
+                  autoFixBondAngles
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm shadow-emerald-500/10'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700'
+                }`}
+                title={autoFixBondAngles ? 'Auto-Fix Bond Angles is ACTIVE (Click to toggle manual mode)' : 'Enable Auto-Fix Bond Angles (VSEPR geometry)'}
+              >
+                <Compass className={`w-3.5 h-3.5 ${autoFixBondAngles ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span>Auto-Fix: <strong className={autoFixBondAngles ? 'text-emerald-300' : 'text-slate-400'}>{autoFixBondAngles ? 'ON' : 'OFF'}</strong></span>
+              </button>
+              <button
                 onClick={handleFixBondAngles}
-                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 text-xs font-medium flex items-center gap-1 transition-all"
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1 transition-all"
                 title="Enforces exact VSEPR chemical bond angles on all bonded atoms (104.5° bent, 107° pyramidal, 109.5° tetrahedral, 120° planar, 180° linear)"
               >
-                <Compass className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Fix Bond Angles</span>
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Snap Angles</span>
               </button>
               <button
                 onClick={handleAutoConnectProximity}
@@ -2163,10 +2773,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b2', from: 'O1', to: 'H2', order: 1 },
                   ]);
                   setSelectedAtomId('O1');
-                  setStatusMessage('Loaded Water (H₂O) template: Bent geometry with exact 104.5° bond angle (2 bonds + 2 lone pairs).');
+                  triggerRelax();
+                  setStatusMessage('Loaded Water (H₂O) — IUPAC: Oxidane (Bent geometry, 104.5° bond angle).');
                 }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                title="Water (H2O): Bent geometry, 104.5° angle"
+                title="Water (H2O) — IUPAC: Oxidane"
               >
                 H₂O (104.5°)
               </button>
@@ -2184,10 +2795,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b3', from: 'N1', to: 'H3', order: 1 },
                   ]);
                   setSelectedAtomId('N1');
-                  setStatusMessage('Loaded Ammonia (NH₃) template: Trigonal pyramidal with exact 107.0° bond angles (3 bonds + 1 lone pair).');
+                  triggerRelax();
+                  setStatusMessage('Loaded Ammonia (NH₃) — IUPAC: Azane (Trigonal pyramidal, 107.0° bond angles).');
                 }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                title="Ammonia (NH3): Trigonal Pyramidal geometry, 107.0° angle"
+                title="Ammonia (NH3) — IUPAC: Azane"
               >
                 NH₃ (107°)
               </button>
@@ -2207,10 +2819,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b4', from: 'C1', to: 'H4', order: 1 },
                   ]);
                   setSelectedAtomId('C1');
-                  setStatusMessage('Loaded Methane (CH₄) template: Tetrahedral geometry with exact 109.5° bond angles (sp³ hybridization).');
+                  triggerRelax();
+                  setStatusMessage('Loaded Methane (CH₄) — IUPAC: Methane (Tetrahedral, 109.5° bond angles).');
                 }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                title="Methane (CH4): Tetrahedral geometry, 109.5° angle"
+                title="Methane (CH4) — IUPAC: Methane"
               >
                 CH₄ (109.5°)
               </button>
@@ -2226,10 +2839,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b2', from: 'C1', to: 'O2', order: 2 },
                   ]);
                   setSelectedAtomId('C1');
-                  setStatusMessage('Loaded Carbon Dioxide (CO₂) template: Linear geometry with exact 180.0° bond angle (sp hybridization).');
+                  triggerRelax();
+                  setStatusMessage('Loaded Carbon Dioxide (CO₂) — IUPAC: Carbon dioxide (Linear, 180.0° bond angle).');
                 }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                title="Carbon Dioxide (CO2): Linear geometry, 180.0° angle"
+                title="Carbon Dioxide (CO2) — IUPAC: Carbon dioxide"
               >
                 CO₂ (180°)
               </button>
@@ -2247,10 +2861,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b3', from: 'B1', to: 'F3', order: 1 },
                   ]);
                   setSelectedAtomId('B1');
-                  setStatusMessage('Loaded Boron Trifluoride (BF₃) template: Trigonal planar geometry with exact 120.0° bond angles (sp² hybridization).');
+                  triggerRelax();
+                  setStatusMessage('Loaded Boron Trifluoride (BF₃) — IUPAC: Trifluoroborane (Trigonal planar, 120.0° angles).');
                 }}
                 className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                title="Boron Trifluoride (BF3): Trigonal Planar, 120.0° angle"
+                title="Boron Trifluoride (BF3) — IUPAC: Trifluoroborane"
               >
                 BF₃ (120°)
               </button>
@@ -2268,10 +2883,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b3', from: 'O1', to: 'H3', order: 1 },
                   ]);
                   setSelectedAtomId('O1');
-                  setStatusMessage('Loaded Hydronium Ion (H₃O⁺): O⁺ lost 1 e⁻ (5 valence e⁻) enabling 3 pyramidal bonds!');
+                  triggerRelax();
+                  setStatusMessage('Loaded Hydronium Ion (H₃O⁺) — IUPAC: Oxidanium (Onium cation with 3 pyramidal bonds).');
                 }}
                 className="px-2 py-0.5 rounded bg-sky-950/70 hover:bg-sky-900 border border-sky-500/40 text-sky-200 font-bold"
-                title="Hydronium Ion: O lost an electron to become O+ and make 3 bonds"
+                title="Hydronium Ion (H3O+) — IUPAC: Oxidanium"
               >
                 H₃O⁺
               </button>
@@ -2291,10 +2907,11 @@ export const MoleculeBuilderSandbox: React.FC<MoleculeBuilderSandboxProps> = ({
                     { id: 'b4', from: 'N1', to: 'H4', order: 1 },
                   ]);
                   setSelectedAtomId('N1');
-                  setStatusMessage('Loaded Ammonium Ion (NH₄⁺): N⁺ lost 1 e⁻ (4 valence e⁻) forming 4 tetrahedral bonds!');
+                  triggerRelax();
+                  setStatusMessage('Loaded Ammonium Ion (NH₄⁺) — IUPAC: Azanium (Onium cation with 4 tetrahedral bonds).');
                 }}
                 className="px-2 py-0.5 rounded bg-sky-950/70 hover:bg-sky-900 border border-sky-500/40 text-sky-200 font-bold"
-                title="Ammonium Ion: N lost an electron to become N+ and make 4 bonds"
+                title="Ammonium Ion (NH4+) — IUPAC: Azanium"
               >
                 NH₄⁺
               </button>
