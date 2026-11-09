@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { Header, LabTab } from './Header';
 import { AtomSimulator3D } from './AtomSimulator3D';
 import { MoleculeSimulator3D } from './MoleculeSimulator3D';
@@ -88,6 +89,7 @@ export default function App() {
           />
         )}
       </main>
+      <SpeedInsights />
     </div>
   );
 }
